@@ -1,0 +1,22 @@
+Given an Inspector CVE finding, determine the shell command to patch the vulnerable package.
+
+Inspector finding:
+{{finding}}
+
+Respond with ONLY a JSON object (no markdown):
+{
+  "action": "PATCH" or "SKIP",
+  "command": "the exact shell command to run",
+  "reason": "one-line explanation"
+}
+
+Rules:
+- If the finding already has a remediation command in the Remediation or Vulnerabilities fields, use it as-is.
+- Only generate your own command if the finding doesn't provide one.
+- Amazon Linux 2023: `dnf update <package> --releasever latest -y`
+- Amazon Linux 2: `yum update <package> -y`
+- Ubuntu/Debian: `apt-get update && apt-get install --only-upgrade <package> -y`
+- Extract the package name from the Title (usually "CVE-XXXX-XXXXX - <package>").
+- For ALAS advisories: `dnf update --advisory <advisory-id> --releasever latest -y`
+- If you can't determine the package or OS, set action to "SKIP".
+- Never remove packages, reboot, or change system config.
