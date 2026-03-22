@@ -1,0 +1,57 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SecurityHub",
+      "Effect": "Allow",
+      "Action": [
+        "securityhub:GetFindings",
+        "securityhub:BatchUpdateFindings"
+      ],
+      "Resource": "arn:${partition}:securityhub:${region}:${account_id}:hub/default"
+    },
+    {
+      "Sid": "SNS",
+      "Effect": "Allow",
+      "Action": "sns:Publish",
+      "Resource": "${sns_topic_arn}"
+    },
+    {
+      "Sid": "SSM",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:StartAutomationExecution",
+        "ssm:DescribeAutomationExecutions",
+        "ssm:DescribeDocument",
+        "ssm:GetDocument",
+        "ssm:ListDocuments"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PassRole",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:${partition}:iam::${account_id}:role/sechub-cspm"
+    },
+    {
+      "Sid": "Bedrock",
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": [
+        "arn:${partition}:bedrock:*::foundation-model/*",
+        "arn:${partition}:bedrock:*:${account_id}:inference-profile/*"
+      ]
+    },
+    {
+      "Sid": "SQS",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes"
+      ],
+      "Resource": "${cspm_queue_arn}"
+    }
+  ]
+}

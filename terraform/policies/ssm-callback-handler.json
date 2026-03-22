@@ -1,0 +1,26 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:DescribeAutomationExecutions",
+        "ssm:GetAutomationExecution"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "sns:Publish",
+      "Resource": "${sns_topic_arn}"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "securityhub:GetFindings",
+        "securityhub:BatchUpdateFindings"
+      ],
+      "Resource": "arn:${partition}:securityhub:${region}:${account_id}:hub/default"
+    }
+  ]
+}

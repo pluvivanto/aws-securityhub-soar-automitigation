@@ -1,0 +1,29 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PowerUser",
+      "Effect": "Allow",
+      "NotAction": [
+        "iam:*",
+        "organizations:*",
+        "account:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "IAMLimited",
+      "Effect": "Allow",
+      "Action": [
+        "iam:UpdateAccountPasswordPolicy",
+        "iam:GetAccountPasswordPolicy",
+        "iam:ListAccessKeys",
+        "iam:UpdateAccessKey",
+        "iam:GetAccessKeyLastUsed",
+        "iam:CreateServiceLinkedRole",
+        "iam:PassRole"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

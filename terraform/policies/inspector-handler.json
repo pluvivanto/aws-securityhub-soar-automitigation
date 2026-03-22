@@ -1,0 +1,46 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:SendCommand",
+        "ssm:DescribeInstanceInformation",
+        "ssm:GetCommandInvocation"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "sns:Publish",
+      "Resource": "${sns_topic_arn}"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes"
+      ],
+      "Resource": "${inspector_queue_arn}"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": [
+        "arn:${partition}:bedrock:*::foundation-model/*",
+        "arn:${partition}:bedrock:*:${account_id}:inference-profile/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": "securityhub:BatchUpdateFindings",
+      "Resource": "arn:${partition}:securityhub:${region}:${account_id}:hub/default"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:GetItem"],
+      "Resource": "${lock_table_arn}"
+    }
+  ]
+}

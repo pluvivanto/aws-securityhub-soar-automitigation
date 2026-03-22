@@ -1,0 +1,20 @@
+Pick the best AWS-managed SSM Automation runbook to fix this Security Hub finding.
+
+Available runbooks:
+{{runbooks}}
+
+Finding:
+{{finding}}
+
+Respond with ONLY a JSON object (no markdown):
+{
+  "action": "REMEDIATE" or "SKIP",
+  "document_name": "exact name from the list above",
+  "reason": "one-line explanation"
+}
+
+Rules:
+- Only pick from the list above. Don't invent names.
+- CVE/vulnerability findings: SKIP (patching is handled separately).
+- Destructive actions (delete, terminate, modify IAM users): SKIP.
+- No suitable runbook: SKIP.

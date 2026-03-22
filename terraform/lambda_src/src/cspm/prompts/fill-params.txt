@@ -1,0 +1,26 @@
+Extract parameter values for this SSM Automation document from the Security Hub finding.
+
+SSM Document: {{documentName}}
+
+Parameters (name, type, description, required):
+{{docParams}}
+
+Finding:
+{{finding}}
+
+Respond with ONLY a JSON object (no markdown):
+{
+  "parameters": {"ParamName": ["value"], ...}
+}
+
+Rules:
+- Values must be string arrays: {"BucketName": ["my-bucket"]}.
+- Parse resource IDs from the ARN in Resources[].Id:
+  - S3: arn:aws:s3:::BUCKET → "BUCKET"
+  - EC2: arn:aws:ec2:REGION:ACCT:instance/ID → "ID"
+  - Lambda: arn:aws:lambda:REGION:ACCT:function:NAME → "NAME"
+  - Security group: arn:aws:ec2:REGION:ACCT:security-group/ID → "ID"
+  - Other: take the part after the last ":" or "/"
+- Don't include AutomationAssumeRole (injected automatically).
+- Skip optional params you can't determine from the finding.
+- Never use placeholder values like "REPLACE_WITH_...".
