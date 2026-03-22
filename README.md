@@ -2,7 +2,7 @@
 
 Auto-fixes AWS Security Hub findings using Bedrock to pick the right remediation. No static mapping needed. New controls and CVEs are handled without code changes.
 
-![Architecture](../docs/architecture.png)
+![Architecture](./docs/architecture.png)
 
 ## Lambdas
 
@@ -29,8 +29,6 @@ Slack is optional. To enable it, create `terraform.tfvars`:
 ```hcl
 slack_webhook_url = "https://hooks.slack.com/services/..."
 ```
-
-This file is gitignored.
 
 ## Variables
 
