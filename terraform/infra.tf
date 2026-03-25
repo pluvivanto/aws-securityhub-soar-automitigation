@@ -23,12 +23,12 @@ module "sqs_inspector" {
   version = "~> 4.0"
 
   name                       = "sechub-inspector-queue"
-  visibility_timeout_seconds = 180
+  visibility_timeout_seconds = 960
   message_retention_seconds  = 86400
   receive_wait_time_seconds  = 5
   create_dlq                 = true
   dlq_name                   = "sechub-inspector-dlq"
-  redrive_policy             = { maxReceiveCount = 3 }
+  redrive_policy             = { maxReceiveCount = 30 }
 }
 
 resource "aws_sqs_queue_policy" "cspm" {
@@ -74,7 +74,7 @@ module "eventbridge" {
       event_pattern = jsonencode({
         source      = ["aws.securityhub"]
         detail-type = ["Security Hub Findings - Imported", "Security Hub Findings - Custom"]
-        detail      = { findings = { Workflow = { Status = ["NEW"] }, RecordState = ["ACTIVE"], ProductFields = { "aws/securityhub/ProductName" = [{ "anything-but" = "Inspector" }] } } }
+        detail      = { findings = { Workflow = { Status = ["NEW"] }, RecordState = ["ACTIVE"], ProductFields = { "aws/securityhub/ProductName" = [{ "anything-but" = ["Inspector", "Systems Manager Patch Manager"] }] } } }
       })
     }
     inspector = {
@@ -93,12 +93,21 @@ module "eventbridge" {
         detail      = { Status = ["Success", "Failed", "TimedOut", "Cancelled"] }
       })
     }
+    ssm_command = {
+      description = "SSM Run Command invocation completion (Inspector patches)"
+      event_pattern = jsonencode({
+        source      = ["aws.ssm"]
+        detail-type = ["EC2 Command Invocation Status-change Notification"]
+        detail      = { status = ["Success", "Failed", "TimedOut", "Cancelled"] }
+      })
+    }
   }
 
   targets = {
-    cspm       = [{ name = "cspm-queue", arn = module.sqs_cspm.queue_arn }]
-    inspector  = [{ name = "inspector-queue", arn = module.sqs_inspector.queue_arn }]
-    ssm_status = [{ name = "ssm-callback", arn = module.ssm_callback.lambda_function_arn }]
+    cspm        = [{ name = "cspm-queue", arn = module.sqs_cspm.queue_arn }]
+    inspector   = [{ name = "inspector-queue", arn = module.sqs_inspector.queue_arn }]
+    ssm_status  = [{ name = "ssm-callback", arn = module.ssm_callback.lambda_function_arn }]
+    ssm_command = [{ name = "ssm-cmd-callback", arn = module.ssm_callback.lambda_function_arn }]
   }
 }
 
@@ -155,11 +164,11 @@ module "inspector" {
   description   = "Handles Inspector CVEs — asks Bedrock for the patch command and runs it via SSM"
   handler       = "handler.handler"
   runtime       = "nodejs22.x"
-  timeout       = 120
+  timeout       = 60
   memory_size   = 128
   source_path   = "${path.module}/lambda_src/dist/inspector"
 
-  environment_variables = { SNS_TOPIC_ARN = module.sns.topic_arn, BEDROCK_MODEL_ID = var.bedrock_model_id, LOCK_TABLE = aws_dynamodb_table.patch_lock.name }
+  environment_variables             = { SNS_TOPIC_ARN = module.sns.topic_arn, BEDROCK_MODEL_ID = var.bedrock_model_id, LOCK_TABLE = aws_dynamodb_table.patch_lock.name }
   cloudwatch_logs_retention_in_days = var.log_retention_days
 
   event_source_mapping = {
@@ -185,27 +194,138 @@ module "ssm_callback" {
   version = "~> 7.0"
 
   function_name = "sechub-ssm-callback"
-  description   = "Forwards SSM Automation completion events to SNS"
+  description   = "Handles SSM Automation and Run Command completion events"
   handler       = "handler.handler"
   runtime       = "nodejs22.x"
   timeout       = 30
   memory_size   = 128
   source_path   = "${path.module}/lambda_src/dist/ssm-callback"
 
-  environment_variables = { SNS_TOPIC_ARN = module.sns.topic_arn }
+  environment_variables             = { SNS_TOPIC_ARN = module.sns.topic_arn, LOCK_TABLE = aws_dynamodb_table.patch_lock.name }
   cloudwatch_logs_retention_in_days = var.log_retention_days
 
   attach_policy_json = true
   policy_json = templatefile("${path.module}/policies/ssm-callback-handler.json", {
-    sns_topic_arn = module.sns.topic_arn
-    partition     = local.partition
-    region        = local.region
-    account_id    = local.account_id
+    sns_topic_arn  = module.sns.topic_arn
+    partition      = local.partition
+    region         = local.region
+    account_id     = local.account_id
+    lock_table_arn = aws_dynamodb_table.patch_lock.arn
   })
 
   allowed_triggers = {
-    eventbridge = { principal = "events.amazonaws.com", source_arn = module.eventbridge.eventbridge_rule_arns["ssm_status"] }
+    eventbridge_automation = { principal = "events.amazonaws.com", source_arn = module.eventbridge.eventbridge_rule_arns["ssm_status"] }
+    eventbridge_command    = { principal = "events.amazonaws.com", source_arn = module.eventbridge.eventbridge_rule_arns["ssm_command"] }
   }
 
   create_current_version_allowed_triggers = false
+}
+
+
+resource "aws_cloudwatch_dashboard" "main" {
+  dashboard_name = "sechub-auto-remediation"
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        type = "metric", x = 0, y = 0, width = 12, height = 6
+        properties = {
+          title  = "Lambda Invocations"
+          region = local.region
+          metrics = [
+            ["AWS/Lambda", "Invocations", "FunctionName", "sechub-cspm", { stat = "Sum" }],
+            ["...", "sechub-inspector", { stat = "Sum" }],
+            ["...", "sechub-ssm-callback", { stat = "Sum" }],
+            ["...", "sechub-slack", { stat = "Sum" }],
+          ]
+          period = 300
+        }
+      },
+      {
+        type = "metric", x = 12, y = 0, width = 12, height = 6
+        properties = {
+          title  = "Lambda Errors"
+          region = local.region
+          metrics = [
+            ["AWS/Lambda", "Errors", "FunctionName", "sechub-cspm", { stat = "Sum", color = "#d62728" }],
+            ["...", "sechub-inspector", { stat = "Sum", color = "#ff7f0e" }],
+            ["...", "sechub-ssm-callback", { stat = "Sum", color = "#9467bd" }],
+          ]
+          period = 300
+        }
+      },
+      {
+        type = "metric", x = 0, y = 6, width = 12, height = 6
+        properties = {
+          title  = "Lambda Duration (avg ms)"
+          region = local.region
+          metrics = [
+            ["AWS/Lambda", "Duration", "FunctionName", "sechub-cspm", { stat = "Average" }],
+            ["...", "sechub-inspector", { stat = "Average" }],
+            ["...", "sechub-ssm-callback", { stat = "Average" }],
+          ]
+          period = 300
+        }
+      },
+      {
+        type = "metric", x = 12, y = 6, width = 12, height = 6
+        properties = {
+          title  = "Lambda Throttles"
+          region = local.region
+          metrics = [
+            ["AWS/Lambda", "Throttles", "FunctionName", "sechub-cspm", { stat = "Sum", color = "#d62728" }],
+            ["...", "sechub-inspector", { stat = "Sum", color = "#ff7f0e" }],
+          ]
+          period = 300
+        }
+      },
+      {
+        type = "metric", x = 0, y = 12, width = 12, height = 6
+        properties = {
+          title  = "SQS — Messages Visible (queue depth)"
+          region = local.region
+          metrics = [
+            ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "sechub-cspm-queue"],
+            ["...", "sechub-inspector-queue"],
+          ]
+          period = 60
+        }
+      },
+      {
+        type = "metric", x = 12, y = 12, width = 12, height = 6
+        properties = {
+          title  = "SQS — DLQ Messages"
+          region = local.region
+          metrics = [
+            ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "sechub-cspm-dlq", { color = "#d62728" }],
+            ["...", "sechub-inspector-dlq", { color = "#ff7f0e" }],
+          ]
+          period = 60
+        }
+      },
+      {
+        type = "metric", x = 0, y = 18, width = 12, height = 6
+        properties = {
+          title  = "SQS — Age of Oldest Message (seconds)"
+          region = local.region
+          metrics = [
+            ["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", "sechub-cspm-queue"],
+            ["...", "sechub-inspector-queue"],
+          ]
+          period = 60
+        }
+      },
+      {
+        type = "metric", x = 12, y = 18, width = 12, height = 6
+        properties = {
+          title  = "Lambda Concurrent Executions"
+          region = local.region
+          metrics = [
+            ["AWS/Lambda", "ConcurrentExecutions", "FunctionName", "sechub-cspm"],
+            ["...", "sechub-inspector"],
+          ]
+          period = 60
+        }
+      },
+    ]
+  })
 }

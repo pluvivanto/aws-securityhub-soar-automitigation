@@ -5,8 +5,7 @@
       "Effect": "Allow",
       "Action": [
         "ssm:SendCommand",
-        "ssm:DescribeInstanceInformation",
-        "ssm:GetCommandInvocation"
+        "ssm:DescribeInstanceInformation"
       ],
       "Resource": "*"
     },
@@ -34,12 +33,12 @@
     },
     {
       "Effect": "Allow",
-      "Action": "securityhub:BatchUpdateFindings",
+      "Action": ["securityhub:BatchUpdateFindings", "securityhub:GetFindings"],
       "Resource": "arn:${partition}:securityhub:${region}:${account_id}:hub/default"
     },
     {
       "Effect": "Allow",
-      "Action": ["dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:GetItem"],
+      "Action": ["dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:GetItem", "dynamodb:UpdateItem"],
       "Resource": "${lock_table_arn}"
     }
   ]

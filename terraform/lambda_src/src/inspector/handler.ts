@@ -2,15 +2,10 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
-import { DeleteItemCommand, DynamoDBClient, PutItemCommand } from "@aws-sdk/client-dynamodb";
-import { BatchUpdateFindingsCommand, SecurityHubClient } from "@aws-sdk/client-securityhub";
+import { DeleteItemCommand, DynamoDBClient, PutItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { BatchUpdateFindingsCommand, GetFindingsCommand, SecurityHubClient } from "@aws-sdk/client-securityhub";
 import { PublishCommand, SNSClient } from "@aws-sdk/client-sns";
-import {
-  DescribeInstanceInformationCommand,
-  GetCommandInvocationCommand,
-  SendCommandCommand,
-  SSMClient,
-} from "@aws-sdk/client-ssm";
+import { DescribeInstanceInformationCommand, SendCommandCommand, SSMClient } from "@aws-sdk/client-ssm";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPT = readFileSync(join(__dirname, "prompts", "patch-command.txt"), "utf-8");
@@ -30,10 +25,6 @@ function ssmCommandUrl(commandId: string) {
   return `https://${REGION}.console.aws.amazon.com/systems-manager/run-command/${commandId}?region=${REGION}`;
 }
 
-function ssmAutomationUrl(executionId: string) {
-  return `https://${REGION}.console.aws.amazon.com/systems-manager/automation/execution/${executionId}?region=${REGION}`;
-}
-
 export async function handler(event: any) {
   const findings: any[] = [];
   if (event.Records) {
@@ -51,66 +42,67 @@ export async function handler(event: any) {
   return { processed: results.length, results };
 }
 
-async function processFinding(finding: any) {
-  const resourceId = finding.Resources?.[0]?.Id ?? "";
+async function processFinding(triggerFinding: any) {
+  const resourceId = triggerFinding.Resources?.[0]?.Id ?? "";
   const instanceId = resourceId.includes("instance/") ? resourceId.split("instance/")[1] : "";
   if (!instanceId) return { status: "SKIPPED", reason: "not an EC2 instance" };
 
-  const title = finding.Title ?? "Unknown CVE";
-  const severity = finding.Severity?.Label ?? "UNKNOWN";
-  const cveId = title.split(" - ")[0];
-  const packages = title.includes(" - ") ? title.split(" - ").slice(1).join(" - ") : "unknown";
-  const notifyTitle = `${cveId} - ${instanceId}`;
+  const workflowStatus = triggerFinding.Workflow?.Status ?? "NEW";
+  if (workflowStatus !== "NEW") {
+    console.log(
+      JSON.stringify({ event: "ALREADY_PROCESSED", instanceId, findingId: triggerFinding.Id, workflowStatus }),
+    );
+    return { status: "SKIPPED", reason: `finding already ${workflowStatus}` };
+  }
 
-  console.log(JSON.stringify({ event: "PATCH_REQUESTED", instanceId, title, severity }));
+  console.log(JSON.stringify({ event: "PATCH_REQUESTED", instanceId, title: triggerFinding.Title }));
 
   // Acquire lock — if another invocation is patching this instance, fail so SQS retries
   const locked = await acquireLock(instanceId);
   if (!locked) {
-    throw new Error(`Instance ${instanceId} is locked — will retry via SQS`);
+    throw new Error(`${instanceId} is locked, retry pending`);
   }
 
+  let success = false;
   try {
-    // Mark finding so it doesn't re-trigger
-    const findingId = finding.Id ?? "";
-    const productArn = finding.ProductArn ?? "";
-    if (findingId && productArn) {
-      try {
-        await sechub.send(
-          new BatchUpdateFindingsCommand({
-            FindingIdentifiers: [{ Id: findingId, ProductArn: productArn }],
-            Workflow: { Status: "NOTIFIED" as any },
-            Note: { Text: `Patch attempt for ${title}`, UpdatedBy: "sechub-auto-remediation" },
-          }),
-        );
-      } catch {}
-    }
-
     if (!(await isInstanceManaged(instanceId))) {
-      await notify(notifyTitle, instanceId, "SKIPPED", `Instance ${instanceId} is not managed by SSM`);
+      await notify(`CVEs - ${instanceId}`, instanceId, "SKIPPED", `Instance ${instanceId} is not managed by SSM`);
       return { status: "SKIPPED", reason: "not SSM managed" };
     }
 
-    // Ask Bedrock for the patch command
-    const trimmed = {
-      Title: title,
-      Description: finding.Description ?? "",
-      Severity: finding.Severity ?? {},
-      Resources: finding.Resources ?? [],
-      Remediation: finding.Remediation ?? {},
-      Vulnerabilities: finding.Vulnerabilities ?? [],
-      ProductFields: finding.ProductFields ?? {},
-    };
+    const allFindings = await getAllCveFindings(instanceId);
+    if (allFindings.length === 0) {
+      return { status: "SKIPPED", reason: "no NEW CVE findings for instance" };
+    }
+
+    console.log(JSON.stringify({ event: "BATCH_PATCH", instanceId, count: allFindings.length }));
+
+    const summaries = allFindings.map((f) => ({
+      Title: f.Title ?? "",
+      RemediationText: f.Remediation?.Recommendation?.Text ?? "",
+      VulnerablePackages: (f.Vulnerabilities ?? []).flatMap((v: any) => v.VulnerablePackages ?? []),
+    }));
 
     const decision: Record<string, string> = await callBedrock(
-      PROMPT.replace("{{finding}}", JSON.stringify(trimmed, null, 2)),
+      PROMPT.replace("{{findings}}", JSON.stringify(summaries, null, 2)),
     );
     console.log(JSON.stringify({ event: "BEDROCK_PATCH_DECISION", instanceId, ...decision }));
 
     if (decision.action !== "PATCH") {
-      await notify(notifyTitle, instanceId, "SKIPPED", decision.reason ?? "Bedrock skipped");
+      await notify(`CVEs - ${instanceId}`, instanceId, "SKIPPED", decision.reason ?? "Bedrock skipped");
       return { status: "SKIPPED", reason: decision.reason };
     }
+
+    const findingIds = allFindings.map((f) => ({ Id: f.Id!, ProductArn: f.ProductArn! }));
+    await storeFindingIds(instanceId, findingIds);
+
+    await sechub.send(
+      new BatchUpdateFindingsCommand({
+        FindingIdentifiers: findingIds,
+        Workflow: { Status: "NOTIFIED" as any },
+        Note: { Text: `patching ${allFindings.length} CVEs`, UpdatedBy: "sechub-auto-remediation" },
+      }),
+    );
 
     const { Command } = await ssm.send(
       new SendCommandCommand({
@@ -118,42 +110,45 @@ async function processFinding(finding: any) {
         DocumentName: "AWS-RunShellScript",
         Parameters: { commands: [decision.command] },
         TimeoutSeconds: 600,
-        Comment: `Auto-patch: ${title}`,
+        Comment: `Auto-patch: ${allFindings.length} CVEs on ${instanceId}`,
       }),
     );
 
     const commandId = Command?.CommandId ?? "unknown";
-    const cmdUrl = ssmCommandUrl(commandId);
     await notify(
-      notifyTitle,
+      `CVEs - ${instanceId}`,
       instanceId,
       "PATCH_STARTED",
-      `Patching ${packages} on \`${instanceId}\`\n<${cmdUrl}|View in console>`,
+      `Patching ${allFindings.length} CVEs on \`${instanceId}\`\n<${ssmCommandUrl(commandId)}|View in console>`,
     );
 
-    const result = await waitForCommand(commandId, instanceId);
-
-    if (result.status === "Success") {
-      console.log(JSON.stringify({ event: "PATCH_COMPLETE", instanceId, commandId, command: decision.command }));
-      await notify(
-        notifyTitle,
-        instanceId,
-        "PATCH_COMPLETE",
-        `Patched ${packages} on \`${instanceId}\`\n<${cmdUrl}|View in console>`,
-      );
-      return { status: "PATCH_COMPLETE", instanceId, commandId };
-    } else {
-      console.log(JSON.stringify({ event: "PATCH_FAILED", instanceId, commandId, status: result.status }));
-      await notify(
-        notifyTitle,
-        instanceId,
-        "PATCH_FAILED",
-        `Failed to patch ${packages} on \`${instanceId}\`\nError: ${result.output.slice(0, 500)}\n<${cmdUrl}|View in console>`,
-      );
-      return { status: "PATCH_FAILED", instanceId, detail: result.status };
-    }
+    console.log(JSON.stringify({ event: "PATCH_DISPATCHED", instanceId, commandId, cveCount: allFindings.length }));
+    success = true;
+    return { status: "PATCH_DISPATCHED", instanceId, commandId, cveCount: allFindings.length };
   } finally {
-    await releaseLock(instanceId);
+    if (!success) {
+      await releaseLock(instanceId);
+    }
+  }
+}
+
+async function getAllCveFindings(instanceId: string): Promise<any[]> {
+  try {
+    const { Findings } = await sechub.send(
+      new GetFindingsCommand({
+        Filters: {
+          WorkflowStatus: [{ Value: "NEW", Comparison: "EQUALS" }],
+          RecordState: [{ Value: "ACTIVE", Comparison: "EQUALS" }],
+          ProductFields: [{ Key: "aws/securityhub/ProductName", Value: "Inspector", Comparison: "EQUALS" }],
+          ResourceId: [{ Value: instanceId, Comparison: "CONTAINS" }],
+        },
+        MaxResults: 100,
+      }),
+    );
+    return Findings ?? [];
+  } catch (e: any) {
+    console.log(JSON.stringify({ event: "GET_FINDINGS_FAILED", instanceId, error: e.message ?? String(e) }));
+    return [];
   }
 }
 
@@ -164,7 +159,7 @@ async function acquireLock(instanceId: string): Promise<boolean> {
         TableName: LOCK_TABLE,
         Item: {
           instanceId: { S: instanceId },
-          expiresAt: { N: String(Math.floor(Date.now() / 1000) + 300) }, // 5 min TTL
+          expiresAt: { N: String(Math.floor(Date.now() / 1000) + 900) },
         },
         ConditionExpression: "attribute_not_exists(instanceId)",
       }),
@@ -173,6 +168,21 @@ async function acquireLock(instanceId: string): Promise<boolean> {
   } catch (e: any) {
     if (e.name === "ConditionalCheckFailedException") return false;
     throw e;
+  }
+}
+
+async function storeFindingIds(instanceId: string, findingIds: { Id: string; ProductArn: string }[]) {
+  try {
+    await ddb.send(
+      new UpdateItemCommand({
+        TableName: LOCK_TABLE,
+        Key: { instanceId: { S: instanceId } },
+        UpdateExpression: "SET findingIds = :ids",
+        ExpressionAttributeValues: { ":ids": { S: JSON.stringify(findingIds) } },
+      }),
+    );
+  } catch (e: any) {
+    console.log(JSON.stringify({ event: "STORE_FINDING_IDS_FAILED", instanceId, error: e.message ?? String(e) }));
   }
 }
 
@@ -205,24 +215,6 @@ async function callBedrock(prompt: string): Promise<any> {
       .replace(/```\s*$/, "")
       .trim();
   return JSON.parse(text);
-}
-
-async function waitForCommand(
-  commandId: string,
-  instanceId: string,
-  maxWaitMs = 90000,
-): Promise<{ status: string; output: string }> {
-  const start = Date.now();
-  while (Date.now() - start < maxWaitMs) {
-    await new Promise((r) => setTimeout(r, 5000));
-    try {
-      const inv = await ssm.send(new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: instanceId }));
-      const status = inv.Status ?? "Pending";
-      if (["Success", "Failed", "TimedOut", "Cancelled"].includes(status))
-        return { status, output: inv.StandardOutputContent ?? inv.StandardErrorContent ?? "" };
-    } catch {}
-  }
-  return { status: "StillRunning", output: "Timed out waiting — check SSM console" };
 }
 
 async function isInstanceManaged(instanceId: string): Promise<boolean> {

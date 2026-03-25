@@ -4,10 +4,26 @@ terraform {
     aws     = { source = "hashicorp/aws", version = ">= 5.0" }
     archive = { source = "hashicorp/archive", version = ">= 2.0" }
   }
+
+  backend "s3" {
+    bucket         = "sechub-soar-tfstate-ACCOUNT_ID"
+    key            = "terraform.tfstate"
+    region         = "eu-west-1"
+    dynamodb_table = "sechub-soar-tflock"
+    encrypt        = true
+    profile        = "AWS_PROFILE"
+    assume_role = {
+      role_arn = "arn:aws:iam::ACCOUNT_ID:role/sechub-terraform-deploy"
+    }
+  }
 }
 
 provider "aws" {
-  region = var.aws_region
+  region  = var.aws_region
+  profile = var.aws_profile
+  assume_role {
+    role_arn = "arn:aws:iam::ACCOUNT_ID:role/sechub-terraform-deploy"
+  }
   default_tags { tags = { Project = "sechub-auto-remediation", ManagedBy = "terraform" } }
 }
 
@@ -27,6 +43,11 @@ variable "aws_region" {
   default = "us-east-1"
 }
 
+variable "aws_profile" {
+  type    = string
+  default = ""
+}
+
 variable "log_retention_days" {
   type    = number
   default = 30
@@ -39,7 +60,7 @@ variable "lambda_timeout" {
 
 variable "bedrock_model_id" {
   type    = string
-  default = "us.anthropic.claude-opus-4-5-20251101-v1:0"
+  default = "global.anthropic.claude-opus-4-5-20251101-v1:0"
 }
 
 variable "slack_webhook_url" {
@@ -54,7 +75,7 @@ variable "enabled_controls" {
   default     = ["*"]
 }
 
-output "cspm_function_name"       { value = module.cspm.lambda_function_name }
-output "sns_topic_arn"            { value = module.sns.topic_arn }
-output "cspm_queue_url"           { value = module.sqs_cspm.queue_url }
-output "inspector_queue_url"      { value = module.sqs_inspector.queue_url }
+output "cspm_function_name" { value = module.cspm.lambda_function_name }
+output "sns_topic_arn" { value = module.sns.topic_arn }
+output "cspm_queue_url" { value = module.sqs_cspm.queue_url }
+output "inspector_queue_url" { value = module.sqs_inspector.queue_url }

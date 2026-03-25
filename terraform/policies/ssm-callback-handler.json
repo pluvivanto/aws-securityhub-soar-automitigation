@@ -2,25 +2,35 @@
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "SSM",
       "Effect": "Allow",
       "Action": [
         "ssm:DescribeAutomationExecutions",
-        "ssm:GetAutomationExecution"
+        "ssm:GetAutomationExecution",
+        "ssm:GetCommandInvocation"
       ],
       "Resource": "*"
     },
     {
+      "Sid": "SNS",
       "Effect": "Allow",
       "Action": "sns:Publish",
       "Resource": "${sns_topic_arn}"
     },
     {
+      "Sid": "SecurityHub",
       "Effect": "Allow",
       "Action": [
         "securityhub:GetFindings",
         "securityhub:BatchUpdateFindings"
       ],
       "Resource": "arn:${partition}:securityhub:${region}:${account_id}:hub/default"
+    },
+    {
+      "Sid": "PatchLock",
+      "Effect": "Allow",
+      "Action": ["dynamodb:DeleteItem", "dynamodb:GetItem"],
+      "Resource": "${lock_table_arn}"
     }
   ]
 }

@@ -1,11 +1,15 @@
+import { DeleteItemCommand, DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { BatchUpdateFindingsCommand, GetFindingsCommand, SecurityHubClient } from "@aws-sdk/client-securityhub";
 import { PublishCommand, SNSClient } from "@aws-sdk/client-sns";
-import { GetAutomationExecutionCommand, SSMClient } from "@aws-sdk/client-ssm";
+import { GetAutomationExecutionCommand, GetCommandInvocationCommand, SSMClient } from "@aws-sdk/client-ssm";
 
 const ssm = new SSMClient({});
 const sechub = new SecurityHubClient({});
 const sns = new SNSClient({});
+const ddb = new DynamoDBClient({});
 const SNS_TOPIC_ARN = process.env.SNS_TOPIC_ARN!;
+const LOCK_TABLE = process.env.LOCK_TABLE ?? "";
+const REGION = process.env.AWS_REGION ?? "us-east-1";
 const OUR_ROLE_PATTERN = "sechub-cspm";
 
 const STATUS_MAP: Record<string, string> = {
@@ -15,7 +19,27 @@ const STATUS_MAP: Record<string, string> = {
   Cancelled: "REMEDIATION_CANCELLED",
 };
 
+const COMMAND_STATUS_MAP: Record<string, string> = {
+  Success: "PATCH_COMPLETE",
+  Failed: "PATCH_FAILED",
+  TimedOut: "PATCH_FAILED",
+  Cancelled: "PATCH_FAILED",
+};
+
 export async function handler(event: any) {
+  const detailType = event["detail-type"] ?? "";
+
+  if (detailType === "EC2 Automation Execution Status-change Notification") {
+    return handleAutomationCallback(event);
+  }
+  if (detailType === "EC2 Command Invocation Status-change Notification") {
+    return handleRunCommandCallback(event);
+  }
+
+  console.log(JSON.stringify({ event: "UNKNOWN_EVENT_TYPE", detailType }));
+}
+
+async function handleAutomationCallback(event: any) {
   const { ExecutionId: executionId = "unknown", Status: status = "unknown" } = event.detail ?? {};
 
   let docName = event.detail?.Definition ?? "unknown";
@@ -41,9 +65,7 @@ export async function handler(event: any) {
     .map(([k, v]) => `${k}=${v[0]}`)
     .join(", ");
 
-  const REGION = process.env.AWS_REGION ?? "us-east-1";
   const execUrl = `https://${REGION}.console.aws.amazon.com/systems-manager/automation/execution/${executionId}?region=${REGION}`;
-
   const mappedStatus = STATUS_MAP[status] ?? status;
   const message =
     status === "Failed"
@@ -55,17 +77,74 @@ export async function handler(event: any) {
     await resolveMatchingFindings(executionId);
   }
 
-  await sns.send(
-    new PublishCommand({
-      TopicArn: SNS_TOPIC_ARN,
-      Subject: `[${mappedStatus}] ${docName}`,
-      Message: JSON.stringify(
-        { control: docName, resource: paramSummary || "unknown", status: mappedStatus, message },
-        null,
-        2,
-      ),
-    }),
-  );
+  await notifySns(docName, paramSummary || "unknown", mappedStatus, message);
+}
+
+async function handleRunCommandCallback(event: any) {
+  const commandId = event.detail?.["command-id"] ?? "unknown";
+  const status = event.detail?.status ?? "unknown";
+  const docName = event.detail?.["document-name"] ?? "";
+  const instanceId = event.detail?.["instance-id"] ?? "unknown";
+
+  if (docName !== "AWS-RunShellScript") return;
+  if (!LOCK_TABLE || instanceId === "unknown") return;
+
+  let lockItem: Record<string, any> | undefined;
+  try {
+    const { Item } = await ddb.send(
+      new GetItemCommand({ TableName: LOCK_TABLE, Key: { instanceId: { S: instanceId } } }),
+    );
+    lockItem = Item;
+  } catch {}
+  if (!lockItem) return;
+
+  const cmdUrl = `https://${REGION}.console.aws.amazon.com/systems-manager/run-command/${commandId}?region=${REGION}`;
+  const mappedStatus = COMMAND_STATUS_MAP[status] ?? status;
+  const title = `Patch - ${instanceId}`;
+
+  let output = "";
+  if (status !== "Success") {
+    try {
+      const inv = await ssm.send(new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: instanceId }));
+      output = inv.StandardErrorContent ?? inv.StandardOutputContent ?? "";
+    } catch (e: any) {
+      console.log(JSON.stringify({ event: "GET_INVOCATION_FAILED", commandId, error: e.message ?? String(e) }));
+    }
+  }
+
+  if (status === "Success") {
+    const findingIds: { Id: string; ProductArn: string }[] = lockItem.findingIds?.S
+      ? JSON.parse(lockItem.findingIds.S)
+      : [];
+    if (findingIds.length > 0) {
+      try {
+        await sechub.send(
+          new BatchUpdateFindingsCommand({
+            FindingIdentifiers: findingIds,
+            Workflow: { Status: "RESOLVED" },
+            Note: { Text: `Patch completed (command: ${commandId})`, UpdatedBy: "sechub-auto-remediation" },
+          }),
+        );
+        console.log(JSON.stringify({ event: "FINDINGS_RESOLVED", instanceId, count: findingIds.length, commandId }));
+      } catch (e: any) {
+        console.log(JSON.stringify({ event: "RESOLVE_FINDINGS_FAILED", instanceId, error: e.message ?? String(e) }));
+      }
+    }
+  }
+
+  const message =
+    status === "Success"
+      ? `Patched \`${instanceId}\`\n<${cmdUrl}|View in console>`
+      : `Failed to patch \`${instanceId}\`\nError: ${output.slice(0, 500)}\n<${cmdUrl}|View in console>`;
+
+  console.log(JSON.stringify({ event: "COMMAND_CALLBACK", commandId, instanceId, status: mappedStatus }));
+  await notifySns(title, instanceId, mappedStatus, message);
+
+  try {
+    await ddb.send(new DeleteItemCommand({ TableName: LOCK_TABLE, Key: { instanceId: { S: instanceId } } }));
+  } catch (e: any) {
+    console.log(JSON.stringify({ event: "RELEASE_LOCK_FAILED", instanceId, error: e.message ?? String(e) }));
+  }
 }
 
 async function resolveMatchingFindings(executionId: string) {
@@ -92,4 +171,18 @@ async function resolveMatchingFindings(executionId: string) {
       }),
     );
   } catch {}
+}
+
+async function notifySns(control: string, resource: string, status: string, message: string) {
+  try {
+    await sns.send(
+      new PublishCommand({
+        TopicArn: SNS_TOPIC_ARN,
+        Subject: `[${status}] ${control}`.slice(0, 100),
+        Message: JSON.stringify({ control, resource, status, message }, null, 2),
+      }),
+    );
+  } catch (e: any) {
+    console.log(JSON.stringify({ event: "NOTIFY_FAILED", control, error: e.message ?? String(e) }));
+  }
 }
