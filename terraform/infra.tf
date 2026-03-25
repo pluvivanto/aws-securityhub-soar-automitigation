@@ -133,7 +133,7 @@ module "cspm" {
   }
 
   cloudwatch_logs_retention_in_days = var.log_retention_days
-  trusted_entities = ["ssm.amazonaws.com"]
+  trusted_entities                  = ["ssm.amazonaws.com"]
 
   event_source_mapping = {
     sqs = { event_source_arn = module.sqs_cspm.queue_arn, function_response_types = ["ReportBatchItemFailures"], batch_size = 1 }
@@ -219,113 +219,4 @@ module "ssm_callback" {
   }
 
   create_current_version_allowed_triggers = false
-}
-
-
-resource "aws_cloudwatch_dashboard" "main" {
-  dashboard_name = "sechub-auto-remediation"
-  dashboard_body = jsonencode({
-    widgets = [
-      {
-        type = "metric", x = 0, y = 0, width = 12, height = 6
-        properties = {
-          title  = "Lambda Invocations"
-          region = local.region
-          metrics = [
-            ["AWS/Lambda", "Invocations", "FunctionName", "sechub-cspm", { stat = "Sum" }],
-            ["...", "sechub-inspector", { stat = "Sum" }],
-            ["...", "sechub-ssm-callback", { stat = "Sum" }],
-            ["...", "sechub-slack", { stat = "Sum" }],
-          ]
-          period = 300
-        }
-      },
-      {
-        type = "metric", x = 12, y = 0, width = 12, height = 6
-        properties = {
-          title  = "Lambda Errors"
-          region = local.region
-          metrics = [
-            ["AWS/Lambda", "Errors", "FunctionName", "sechub-cspm", { stat = "Sum", color = "#d62728" }],
-            ["...", "sechub-inspector", { stat = "Sum", color = "#ff7f0e" }],
-            ["...", "sechub-ssm-callback", { stat = "Sum", color = "#9467bd" }],
-          ]
-          period = 300
-        }
-      },
-      {
-        type = "metric", x = 0, y = 6, width = 12, height = 6
-        properties = {
-          title  = "Lambda Duration (avg ms)"
-          region = local.region
-          metrics = [
-            ["AWS/Lambda", "Duration", "FunctionName", "sechub-cspm", { stat = "Average" }],
-            ["...", "sechub-inspector", { stat = "Average" }],
-            ["...", "sechub-ssm-callback", { stat = "Average" }],
-          ]
-          period = 300
-        }
-      },
-      {
-        type = "metric", x = 12, y = 6, width = 12, height = 6
-        properties = {
-          title  = "Lambda Throttles"
-          region = local.region
-          metrics = [
-            ["AWS/Lambda", "Throttles", "FunctionName", "sechub-cspm", { stat = "Sum", color = "#d62728" }],
-            ["...", "sechub-inspector", { stat = "Sum", color = "#ff7f0e" }],
-          ]
-          period = 300
-        }
-      },
-      {
-        type = "metric", x = 0, y = 12, width = 12, height = 6
-        properties = {
-          title  = "SQS — Messages Visible (queue depth)"
-          region = local.region
-          metrics = [
-            ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "sechub-cspm-queue"],
-            ["...", "sechub-inspector-queue"],
-          ]
-          period = 60
-        }
-      },
-      {
-        type = "metric", x = 12, y = 12, width = 12, height = 6
-        properties = {
-          title  = "SQS — DLQ Messages"
-          region = local.region
-          metrics = [
-            ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "sechub-cspm-dlq", { color = "#d62728" }],
-            ["...", "sechub-inspector-dlq", { color = "#ff7f0e" }],
-          ]
-          period = 60
-        }
-      },
-      {
-        type = "metric", x = 0, y = 18, width = 12, height = 6
-        properties = {
-          title  = "SQS — Age of Oldest Message (seconds)"
-          region = local.region
-          metrics = [
-            ["AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", "sechub-cspm-queue"],
-            ["...", "sechub-inspector-queue"],
-          ]
-          period = 60
-        }
-      },
-      {
-        type = "metric", x = 12, y = 18, width = 12, height = 6
-        properties = {
-          title  = "Lambda Concurrent Executions"
-          region = local.region
-          metrics = [
-            ["AWS/Lambda", "ConcurrentExecutions", "FunctionName", "sechub-cspm"],
-            ["...", "sechub-inspector"],
-          ]
-          period = 60
-        }
-      },
-    ]
-  })
 }
