@@ -1,4 +1,4 @@
-import { DeleteItemCommand, DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
+import { DeleteItemCommand, DynamoDBClient, GetItemCommand, PutItemCommand } from "@aws-sdk/client-dynamodb";
 import { BatchUpdateFindingsCommand, GetFindingsCommand, SecurityHubClient } from "@aws-sdk/client-securityhub";
 import { PublishCommand, SNSClient } from "@aws-sdk/client-sns";
 import { GetAutomationExecutionCommand, GetCommandInvocationCommand, SSMClient } from "@aws-sdk/client-ssm";
@@ -47,17 +47,14 @@ async function handleAutomationCallback(event: any) {
   let failureMessage = "";
   let executedBy = "";
 
-  try {
-    const { AutomationExecution: exec } = await ssm.send(
-      new GetAutomationExecutionCommand({ AutomationExecutionId: executionId }),
-    );
-    docName = exec?.DocumentName ?? docName;
-    failureMessage = exec?.FailureMessage ?? "";
-    params = (exec?.Parameters as Record<string, string[]>) ?? {};
-    executedBy = exec?.ExecutedBy ?? "";
-  } catch {}
+  const { AutomationExecution: exec } = await ssm.send(
+    new GetAutomationExecutionCommand({ AutomationExecutionId: executionId }),
+  );
+  docName = exec?.DocumentName ?? docName;
+  failureMessage = exec?.FailureMessage ?? "";
+  params = (exec?.Parameters as Record<string, string[]>) ?? {};
+  executedBy = exec?.ExecutedBy ?? "";
 
-  // Only notify for executions started by our CSPM handler
   if (!executedBy.includes(OUR_ROLE_PATTERN)) return;
 
   const paramSummary = Object.entries(params)
@@ -69,12 +66,17 @@ async function handleAutomationCallback(event: any) {
   const mappedStatus = STATUS_MAP[status] ?? status;
   const message =
     status === "Failed"
-      ? `${docName}\nParams: ${paramSummary}\nError: ${failureMessage}\n<${execUrl}|View in console>`
-      : `${docName}\nParams: ${paramSummary}\n<${execUrl}|View in console>`;
+      ? `${docName}\nexecution: ${executionId}\nParams: ${paramSummary}\nError: ${failureMessage}\n<${execUrl}|View in console>`
+      : `${docName}\nexecution: ${executionId}\nParams: ${paramSummary}\n<${execUrl}|View in console>`;
 
-  // On success, mark the finding as RESOLVED
   if (status === "Success") {
-    await resolveMatchingFindings(executionId);
+    await resolveMatchingFindings(executionId, "RESOLVED", `Remediation confirmed (execution: ${executionId})`);
+  } else if (status === "Failed" || status === "TimedOut") {
+    await resolveMatchingFindings(
+      executionId,
+      "NOTIFIED",
+      `Remediation ${status.toLowerCase()} (execution: ${executionId}): ${failureMessage.slice(0, 256)}`,
+    );
   }
 
   await notifySns(docName, paramSummary || "unknown", mappedStatus, message);
@@ -102,75 +104,104 @@ async function handleRunCommandCallback(event: any) {
   const mappedStatus = COMMAND_STATUS_MAP[status] ?? status;
   const title = `Patch - ${instanceId}`;
 
+  const findingIds: { Id: string; ProductArn: string }[] = lockItem.findingIds?.S
+    ? JSON.parse(lockItem.findingIds.S)
+    : [];
+  const titles: string[] = lockItem.titles?.S ? JSON.parse(lockItem.titles.S) : [];
+  const cveList =
+    titles.length > 0
+      ? "\n" +
+        titles
+          .slice(0, 20)
+          .map((t) => `• ${t}`)
+          .join("\n") +
+        (titles.length > 20 ? `\n• ...and ${titles.length - 20} more` : "")
+      : "";
+
   let output = "";
-  if (status !== "Success") {
-    try {
-      const inv = await ssm.send(new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: instanceId }));
-      output = inv.StandardErrorContent ?? inv.StandardOutputContent ?? "";
-    } catch (e: any) {
-      console.log(JSON.stringify({ event: "GET_INVOCATION_FAILED", commandId, error: e.message ?? String(e) }));
-    }
+  let nothingToDo = false;
+  try {
+    const inv = await ssm.send(new GetCommandInvocationCommand({ CommandId: commandId, InstanceId: instanceId }));
+    const stdOut = inv.StandardOutputContent ?? "";
+    const stdErr = inv.StandardErrorContent ?? "";
+    output = stdErr || stdOut;
+    nothingToDo = status === "Success" && stdOut.includes("Nothing to do");
+  } catch (e: any) {
+    console.log(JSON.stringify({ event: "GET_INVOCATION_FAILED", commandId, error: e.message ?? String(e) }));
   }
 
   if (status === "Success") {
-    const findingIds: { Id: string; ProductArn: string }[] = lockItem.findingIds?.S
-      ? JSON.parse(lockItem.findingIds.S)
-      : [];
     if (findingIds.length > 0) {
       try {
-        await sechub.send(
-          new BatchUpdateFindingsCommand({
-            FindingIdentifiers: findingIds,
-            Workflow: { Status: "RESOLVED" },
-            Note: { Text: `Patch completed (command: ${commandId})`, UpdatedBy: "sechub-auto-remediation" },
-          }),
+        for (let i = 0; i < findingIds.length; i += 100) {
+          await sechub.send(
+            new BatchUpdateFindingsCommand({
+              FindingIdentifiers: findingIds.slice(i, i + 100),
+              Workflow: { Status: "RESOLVED" },
+              Note: { Text: `Patch completed (command: ${commandId})`, UpdatedBy: "sechub-auto-remediation" },
+            }),
+          );
+        }
+        console.log(
+          JSON.stringify({ event: "FINDINGS_RESOLVED", instanceId, count: findingIds.length, commandId, nothingToDo }),
         );
-        console.log(JSON.stringify({ event: "FINDINGS_RESOLVED", instanceId, count: findingIds.length, commandId }));
       } catch (e: any) {
         console.log(JSON.stringify({ event: "RESOLVE_FINDINGS_FAILED", instanceId, error: e.message ?? String(e) }));
       }
     }
   }
 
-  const message =
-    status === "Success"
-      ? `Patched \`${instanceId}\`\n<${cmdUrl}|View in console>`
-      : `Failed to patch \`${instanceId}\`\nError: ${output.slice(0, 500)}\n<${cmdUrl}|View in console>`;
+  console.log(JSON.stringify({ event: "COMMAND_CALLBACK", commandId, instanceId, status: mappedStatus, nothingToDo }));
 
-  console.log(JSON.stringify({ event: "COMMAND_CALLBACK", commandId, instanceId, status: mappedStatus }));
-  await notifySns(title, instanceId, mappedStatus, message);
+  if (!nothingToDo) {
+    const message =
+      status === "Success"
+        ? `Patched \`${instanceId}\` (${findingIds.length} CVEs)${cveList}\n<${cmdUrl}|View in console>`
+        : `Failed to patch \`${instanceId}\` (${findingIds.length} CVEs)${cveList}\nError: ${output.slice(0, 300)}\n<${cmdUrl}|View in console>`;
+    await notifySns(title, instanceId, mappedStatus, message);
+  }
 
   try {
     await ddb.send(new DeleteItemCommand({ TableName: LOCK_TABLE, Key: { instanceId: { S: instanceId } } }));
+    if (status === "Success" && !nothingToDo) {
+      const now = Math.floor(Date.now() / 1000);
+      await ddb.send(
+        new PutItemCommand({
+          TableName: LOCK_TABLE,
+          Item: {
+            instanceId: { S: `${instanceId}#patched` },
+            patchedAt: { N: String(now) },
+            expiresAt: { N: String(now + 3600) },
+          },
+        }),
+      );
+    }
   } catch (e: any) {
     console.log(JSON.stringify({ event: "RELEASE_LOCK_FAILED", instanceId, error: e.message ?? String(e) }));
   }
 }
 
-async function resolveMatchingFindings(executionId: string) {
-  // Find NOTIFIED findings whose note contains this execution ID
-  try {
-    const { Findings: findings } = await sechub.send(
-      new GetFindingsCommand({
-        Filters: {
-          WorkflowStatus: [{ Value: "NOTIFIED", Comparison: "EQUALS" }],
-          NoteText: [{ Value: executionId, Comparison: "PREFIX" }],
-          RecordState: [{ Value: "ACTIVE", Comparison: "EQUALS" }],
-        },
-        MaxResults: 5,
-      }),
-    );
+async function resolveMatchingFindings(executionId: string, workflowStatus: "RESOLVED" | "NOTIFIED", note: string) {
+  const { Findings: findings } = await sechub.send(
+    new GetFindingsCommand({
+      Filters: {
+        WorkflowStatus: [{ Value: "NOTIFIED", Comparison: "EQUALS" }],
+        NoteText: [{ Value: executionId, Comparison: "PREFIX" }],
+        RecordState: [{ Value: "ACTIVE", Comparison: "EQUALS" }],
+      },
+      MaxResults: 100,
+    }),
+  );
 
-    if (!findings?.length) return;
+  if (!findings?.length) return;
 
-    await sechub.send(
-      new BatchUpdateFindingsCommand({
-        FindingIdentifiers: findings.map((f) => ({ Id: f.Id!, ProductArn: f.ProductArn! })),
-        Workflow: { Status: "RESOLVED" },
-        Note: { Text: `Remediation confirmed (execution: ${executionId})`, UpdatedBy: "sechub-auto-remediation" },
-      }),
-    );
-  } catch {}
+  await sechub.send(
+    new BatchUpdateFindingsCommand({
+      FindingIdentifiers: findings.map((f) => ({ Id: f.Id!, ProductArn: f.ProductArn! })),
+      Workflow: { Status: workflowStatus },
+      Note: { Text: note.slice(0, 512), UpdatedBy: "sechub-auto-remediation" },
+    }),
+  );
 }
 
 async function notifySns(control: string, resource: string, status: string, message: string) {

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
+import { DynamoDBClient, GetItemCommand, PutItemCommand } from "@aws-sdk/client-dynamodb";
 import { BatchUpdateFindingsCommand, SecurityHubClient } from "@aws-sdk/client-securityhub";
 import { PublishCommand, SNSClient } from "@aws-sdk/client-sns";
 import {
@@ -21,18 +22,20 @@ const ssm = new SSMClient({});
 const sechub = new SecurityHubClient({});
 const sns = new SNSClient({});
 const bedrock = new BedrockRuntimeClient({});
+const ddb = new DynamoDBClient({});
 
 const SNS_TOPIC_ARN = process.env.SNS_TOPIC_ARN!;
 const ENABLED_CONTROLS: string[] = JSON.parse(process.env.ENABLED_CONTROLS ?? '["*"]');
 const MODEL_ID = process.env.BEDROCK_MODEL_ID!;
 const LAMBDA_ROLE_ARN = process.env.LAMBDA_ROLE_ARN!;
 const REGION = process.env.AWS_REGION ?? "us-east-1";
+const RUNBOOK_CACHE_TABLE = process.env.RUNBOOK_CACHE_TABLE!;
 
 function ssmAutomationUrl(executionId: string) {
   return `https://${REGION}.console.aws.amazon.com/systems-manager/automation/execution/${executionId}?region=${REGION}`;
 }
 
-let runbookCache: string[] | null = null;
+let runbookMemCache: string[] | null = null;
 
 export async function handler(event: any) {
   const findings: any[] = [];
@@ -69,47 +72,42 @@ async function processFinding(finding: any) {
 
   if (!isControlEnabled(controlId)) return { control: controlId, status: "SKIPPED", reason: "not enabled" };
 
-  try {
-    const result = await askBedrockForRunbook(finding);
-    console.log(
-      JSON.stringify({
-        event: "BEDROCK_DECISION",
-        controlId,
-        resourceId,
-        action: result.action,
-        document: result.document_name ?? null,
-        parameters: result.parameters ?? null,
-        reason: result.reason ?? null,
-      }),
-    );
+  const result = await askBedrockForRunbook(finding);
+  console.log(
+    JSON.stringify({
+      event: "BEDROCK_DECISION",
+      controlId,
+      resourceId,
+      action: result.action,
+      document: result.document_name ?? null,
+      parameters: result.parameters ?? null,
+      reason: result.reason ?? null,
+    }),
+  );
 
-    if (result.action === "SKIP") return { control: controlId, status: "SKIPPED", reason: result.reason };
+  if (result.action === "SKIP") return { control: controlId, status: "SKIPPED", reason: result.reason };
 
-    const docName = result.document_name;
-    const params = result.parameters ?? {};
-    params.AutomationAssumeRole = [LAMBDA_ROLE_ARN];
+  const docName = result.document_name;
+  const params = result.parameters ?? {};
+  params.AutomationAssumeRole = [LAMBDA_ROLE_ARN];
 
-    const { AutomationExecutionId: execId } = await ssm.send(
-      new StartAutomationExecutionCommand({
-        DocumentName: docName,
-        Parameters: params,
-      }),
-    );
+  const { AutomationExecutionId: execId } = await ssm.send(
+    new StartAutomationExecutionCommand({
+      DocumentName: docName,
+      Parameters: params,
+    }),
+  );
 
-    const msg = `${execId} | ${docName}`;
-    console.log(
-      JSON.stringify({ event: "SSM_STARTED", controlId, resourceId, document: docName, executionId: execId }),
-    );
-    await updateFinding(findingId, productArn, "NOTIFIED", msg);
-    await notify(controlId, resourceId, "STARTED", `${docName}\n<${ssmAutomationUrl(execId!)}|View in console>`);
-    return { control: controlId, status: "STARTED", document: docName, execution_id: execId };
-  } catch (e: any) {
-    const err = e.message ?? String(e);
-    console.log(JSON.stringify({ event: "PROCESSING_FAILED", controlId, resourceId, error: err }));
-    await updateFinding(findingId, productArn, "NOTIFIED", err);
-    await notify(controlId, resourceId, "FAILED", err);
-    return { control: controlId, status: "FAILED", error: err };
-  }
+  const msg = `${execId} | ${docName}`;
+  console.log(JSON.stringify({ event: "SSM_STARTED", controlId, resourceId, document: docName, executionId: execId }));
+  await updateFinding(findingId, productArn, "NOTIFIED", msg);
+  await notify(
+    controlId,
+    resourceId,
+    "STARTED",
+    `${docName}\nexecution: ${execId}\n<${ssmAutomationUrl(execId!)}|View in console>`,
+  );
+  return { control: controlId, status: "STARTED", document: docName, execution_id: execId };
 }
 
 async function askBedrockForRunbook(finding: any) {
@@ -149,33 +147,50 @@ async function askBedrockForRunbook(finding: any) {
   };
 }
 
-async function callBedrock(prompt: string): Promise<any> {
-  const res = await bedrock.send(
-    new InvokeModelCommand({
-      modelId: MODEL_ID,
-      contentType: "application/json",
-      accept: "application/json",
-      body: JSON.stringify({
-        anthropic_version: "bedrock-2023-05-31",
-        max_tokens: 1024,
-        temperature: 0,
-        messages: [{ role: "user", content: prompt }],
+async function callBedrock(prompt: string, attempt = 0): Promise<any> {
+  try {
+    const res = await bedrock.send(
+      new InvokeModelCommand({
+        modelId: MODEL_ID,
+        contentType: "application/json",
+        accept: "application/json",
+        body: JSON.stringify({
+          anthropic_version: "bedrock-2023-05-31",
+          max_tokens: 1024,
+          temperature: 0,
+          messages: [{ role: "user", content: prompt }],
+        }),
       }),
-    }),
-  );
-  let text: string = JSON.parse(new TextDecoder().decode(res.body)).content[0].text.trim();
-  if (text.startsWith("```"))
-    text = text
-      .split("\n")
-      .slice(1)
-      .join("\n")
-      .replace(/```\s*$/, "")
-      .trim();
-  return JSON.parse(text);
+    );
+    let text: string = JSON.parse(new TextDecoder().decode(res.body)).content[0].text.trim();
+    if (text.startsWith("```"))
+      text = text
+        .split("\n")
+        .slice(1)
+        .join("\n")
+        .replace(/```\s*$/, "")
+        .trim();
+    return JSON.parse(text);
+  } catch (e: any) {
+    if (e.name === "ThrottlingException" && attempt < 3) {
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      return callBedrock(prompt, attempt + 1);
+    }
+    throw e;
+  }
 }
 
 async function getAvailableRunbooks(): Promise<string[]> {
-  if (runbookCache) return runbookCache;
+  if (runbookMemCache) return runbookMemCache;
+
+  const { Item } = await ddb.send(
+    new GetItemCommand({ TableName: RUNBOOK_CACHE_TABLE, Key: { pk: { S: "runbooks" } } }),
+  );
+  if (Item?.names?.S) {
+    runbookMemCache = JSON.parse(Item.names.S);
+    return runbookMemCache!;
+  }
+
   const prefixes = ["AWSConfigRemediation-", "AWS-Disable", "AWS-Enable", "AWS-Close", "AWS-Configure"];
   const names: string[] = [];
   for await (const page of paginateListDocuments(
@@ -190,8 +205,21 @@ async function getAvailableRunbooks(): Promise<string[]> {
     for (const doc of page.DocumentIdentifiers ?? [])
       if (doc.Name && prefixes.some((p) => doc.Name!.includes(p))) names.push(doc.Name);
   }
-  runbookCache = names.sort();
-  return runbookCache;
+  names.sort();
+
+  await ddb.send(
+    new PutItemCommand({
+      TableName: RUNBOOK_CACHE_TABLE,
+      Item: {
+        pk: { S: "runbooks" },
+        names: { S: JSON.stringify(names) },
+        expiresAt: { N: String(Math.floor(Date.now() / 1000) + 6 * 3600) },
+      },
+    }),
+  );
+
+  runbookMemCache = names;
+  return runbookMemCache;
 }
 
 async function getDocParameters(docName: string) {
