@@ -47,6 +47,22 @@ resource "aws_sqs_queue_policy" "inspector" {
   })
 }
 
+resource "aws_dynamodb_table" "runbook_cache" {
+  name         = "sechub-runbook-cache"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "pk"
+
+  attribute {
+    name = "pk"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expiresAt"
+    enabled        = true
+  }
+}
+
 resource "aws_dynamodb_table" "patch_lock" {
   name         = "sechub-patch-lock"
   billing_mode = "PAY_PER_REQUEST"
@@ -112,6 +128,20 @@ module "eventbridge" {
 }
 
 
+resource "null_resource" "lambda_build" {
+  triggers = {
+    src_hash = sha256(join("", [
+      for f in sort(fileset("${path.module}/lambda_src/src", "**")) :
+      filesha256("${path.module}/lambda_src/src/${f}")
+    ]))
+  }
+
+  provisioner "local-exec" {
+    command     = "npm run build"
+    working_dir = "${path.module}/lambda_src"
+  }
+}
+
 module "cspm" {
   source  = "terraform-aws-modules/lambda/aws"
   version = "~> 7.0"
@@ -126,10 +156,11 @@ module "cspm" {
   tracing_mode  = "Active"
 
   environment_variables = {
-    SNS_TOPIC_ARN    = module.sns.topic_arn
-    ENABLED_CONTROLS = jsonencode(var.enabled_controls)
-    BEDROCK_MODEL_ID = var.bedrock_model_id
-    LAMBDA_ROLE_ARN  = "arn:${local.partition}:iam::${local.account_id}:role/sechub-cspm"
+    SNS_TOPIC_ARN         = module.sns.topic_arn
+    ENABLED_CONTROLS      = jsonencode(var.enabled_controls)
+    BEDROCK_MODEL_ID      = var.bedrock_model_id
+    LAMBDA_ROLE_ARN       = module.cspm.lambda_role_arn
+    RUNBOOK_CACHE_TABLE   = aws_dynamodb_table.runbook_cache.name
   }
 
   cloudwatch_logs_retention_in_days = var.log_retention_days
@@ -143,16 +174,18 @@ module "cspm" {
   number_of_policy_jsons = 2
   policy_jsons = [
     templatefile("${path.module}/policies/cspm-handler.json", {
-      partition      = local.partition
-      region         = local.region
-      account_id     = local.account_id
-      sns_topic_arn  = module.sns.topic_arn
-      cspm_queue_arn = module.sqs_cspm.queue_arn
+      partition           = local.partition
+      region              = local.region
+      account_id          = local.account_id
+      sns_topic_arn       = module.sns.topic_arn
+      cspm_queue_arn      = module.sqs_cspm.queue_arn
+      runbook_cache_arn   = aws_dynamodb_table.runbook_cache.arn
     }),
     file("${path.module}/policies/cspm-remediation.json"),
   ]
 
   create_current_version_allowed_triggers = false
+  depends_on                              = [null_resource.lambda_build]
 }
 
 
@@ -168,7 +201,7 @@ module "inspector" {
   memory_size   = 128
   source_path   = "${path.module}/lambda_src/dist/inspector"
 
-  environment_variables             = { SNS_TOPIC_ARN = module.sns.topic_arn, BEDROCK_MODEL_ID = var.bedrock_model_id, LOCK_TABLE = aws_dynamodb_table.patch_lock.name }
+  environment_variables             = { SNS_TOPIC_ARN = module.sns.topic_arn, BEDROCK_MODEL_ID = var.bedrock_model_id, LOCK_TABLE = aws_dynamodb_table.patch_lock.name, ACCOUNT_ID = local.account_id }
   cloudwatch_logs_retention_in_days = var.log_retention_days
 
   event_source_mapping = {
@@ -186,6 +219,7 @@ module "inspector" {
   })
 
   create_current_version_allowed_triggers = false
+  depends_on                              = [null_resource.lambda_build]
 }
 
 
@@ -219,4 +253,5 @@ module "ssm_callback" {
   }
 
   create_current_version_allowed_triggers = false
+  depends_on                              = [null_resource.lambda_build]
 }

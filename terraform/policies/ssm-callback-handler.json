@@ -29,7 +29,7 @@
     {
       "Sid": "PatchLock",
       "Effect": "Allow",
-      "Action": ["dynamodb:DeleteItem", "dynamodb:GetItem"],
+      "Action": ["dynamodb:DeleteItem", "dynamodb:GetItem", "dynamodb:PutItem"],
       "Resource": "${lock_table_arn}"
     }
   ]

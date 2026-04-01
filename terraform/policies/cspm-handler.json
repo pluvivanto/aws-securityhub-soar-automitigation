@@ -44,6 +44,15 @@
       ]
     },
     {
+      "Sid": "RunbookCache",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem"
+      ],
+      "Resource": "${runbook_cache_arn}"
+    },
+    {
       "Sid": "SQS",
       "Effect": "Allow",
       "Action": [
