@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 import {
   DeleteItemCommand,
   DynamoDBClient,
@@ -12,6 +11,7 @@ import {
 import { BatchUpdateFindingsCommand, GetFindingsCommand, SecurityHubClient } from "@aws-sdk/client-securityhub";
 import { PublishCommand, SNSClient } from "@aws-sdk/client-sns";
 import { DescribeInstanceInformationCommand, SendCommandCommand, SSMClient } from "@aws-sdk/client-ssm";
+import { callBedrock, sechubFindingUrl } from "../shared/bedrock.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPT = readFileSync(join(__dirname, "prompts", "patch-command.txt"), "utf-8");
@@ -19,11 +19,9 @@ const PROMPT = readFileSync(join(__dirname, "prompts", "patch-command.txt"), "ut
 const ssm = new SSMClient({});
 const sns = new SNSClient({});
 const sechub = new SecurityHubClient({});
-const bedrock = new BedrockRuntimeClient({});
 const ddb = new DynamoDBClient({});
 
 const SNS_TOPIC_ARN = process.env.SNS_TOPIC_ARN!;
-const MODEL_ID = process.env.BEDROCK_MODEL_ID!;
 const LOCK_TABLE = process.env.LOCK_TABLE!;
 const REGION = process.env.AWS_REGION ?? "us-east-1";
 const ACCOUNT_ID = process.env.ACCOUNT_ID!;
@@ -73,6 +71,7 @@ async function processFinding(triggerFinding: any) {
   let success = false;
   try {
     if (!(await isInstanceManaged(instanceId))) {
+      console.log(JSON.stringify({ event: "NOT_SSM_MANAGED", instanceId }));
       return { status: "SKIPPED", reason: "not SSM managed" };
     }
 
@@ -81,22 +80,29 @@ async function processFinding(triggerFinding: any) {
       return { status: "SKIPPED", reason: "no NEW CVE findings for instance" };
     }
 
-    const patchedAt = await getPatchedAt(instanceId);
+    const { patchedAt, patchedCveIds } = await getPatchRecord(instanceId);
+    let candidateFindings = allFindings;
     if (patchedAt) {
-      const newFindings = allFindings.filter(
+      candidateFindings = candidateFindings.filter(
         (f) => new Date(f.LastObservedAt ?? f.CreatedAt).getTime() / 1000 > patchedAt,
       );
-      if (newFindings.length === 0) {
-        console.log(
-          JSON.stringify({ event: "STALE_FINDINGS_SKIPPED", instanceId, count: allFindings.length, patchedAt }),
-        );
-        return { status: "SKIPPED", reason: "all findings predate last patch" };
-      }
+    }
+    if (patchedCveIds.size > 0) {
+      candidateFindings = candidateFindings.filter((f) => {
+        const cveId = extractCveId(f);
+        return !cveId || !patchedCveIds.has(cveId);
+      });
+    }
+    if (candidateFindings.length === 0) {
+      console.log(
+        JSON.stringify({ event: "STALE_FINDINGS_SKIPPED", instanceId, count: allFindings.length, patchedAt }),
+      );
+      return { status: "SKIPPED", reason: "all findings already patched" };
     }
 
-    console.log(JSON.stringify({ event: "BATCH_PATCH", instanceId, count: allFindings.length }));
+    console.log(JSON.stringify({ event: "BATCH_PATCH", instanceId, count: candidateFindings.length }));
 
-    const summaries = allFindings.map((f) => ({
+    const summaries = candidateFindings.map((f) => ({
       Title: f.Title ?? "",
       RemediationText: f.Remediation?.Recommendation?.Text ?? "",
       VulnerablePackages: (f.Vulnerabilities ?? []).flatMap((v: any) => v.VulnerablePackages ?? []),
@@ -104,6 +110,7 @@ async function processFinding(triggerFinding: any) {
 
     const decision: Record<string, string> = await callBedrock(
       PROMPT.replace("{{findings}}", JSON.stringify(summaries, null, 2)),
+      512,
     );
     console.log(JSON.stringify({ event: "BEDROCK_PATCH_DECISION", instanceId, ...decision }));
 
@@ -111,15 +118,15 @@ async function processFinding(triggerFinding: any) {
       return { status: "SKIPPED", reason: decision.reason };
     }
 
-    const findingIds = allFindings.map((f) => ({ Id: f.Id!, ProductArn: f.ProductArn! }));
-    await storeFindingIds(instanceId, allFindings);
+    const findingIds = candidateFindings.map((f) => ({ Id: f.Id!, ProductArn: f.ProductArn! }));
+    await storePatchInfo(instanceId, candidateFindings);
 
     for (let i = 0; i < findingIds.length; i += 100) {
       await sechub.send(
         new BatchUpdateFindingsCommand({
           FindingIdentifiers: findingIds.slice(i, i + 100),
           Workflow: { Status: "NOTIFIED" as any },
-          Note: { Text: `patching ${allFindings.length} CVEs`, UpdatedBy: "sechub-auto-remediation" },
+          Note: { Text: `patching ${candidateFindings.length} CVEs`, UpdatedBy: "sechub-auto-remediation" },
         }),
       );
     }
@@ -130,27 +137,25 @@ async function processFinding(triggerFinding: any) {
         DocumentName: "AWS-RunShellScript",
         Parameters: { commands: [decision.command] },
         TimeoutSeconds: 600,
-        Comment: `Auto-patch: ${allFindings.length} CVEs on ${instanceId}`,
+        Comment: `Auto-patch: ${candidateFindings.length} CVEs on ${instanceId}`,
       }),
     );
 
     const commandId = Command?.CommandId ?? "unknown";
-    const cveList =
-      "\n" +
-      allFindings
-        .slice(0, 20)
-        .map((f) => `• ${f.Title ?? ""}`)
-        .join("\n") +
-      (allFindings.length > 20 ? `\n• ...and ${allFindings.length - 20} more` : "");
+    const cveList = "\n" + candidateFindings.map((f) => `• <${sechubFindingUrl(f.Id!)}|${f.Title ?? f.Id}>`).join("\n");
     await notify(
-      `CVEs - ${instanceId}`,
+      instanceId,
       instanceId,
       "PATCH_STARTED",
-      `Patching ${allFindings.length} CVEs on \`${instanceId}\`${cveList}\n<${ssmCommandUrl(commandId)}|View in console>`,
+      "Inspector",
+      commandId,
+      `Patching ${candidateFindings.length} CVEs on \`${instanceId}\`${cveList}\n<${ssmCommandUrl(commandId)}|View in console>`,
     );
-    console.log(JSON.stringify({ event: "PATCH_DISPATCHED", instanceId, commandId, cveCount: allFindings.length }));
+    console.log(
+      JSON.stringify({ event: "PATCH_DISPATCHED", instanceId, commandId, cveCount: candidateFindings.length }),
+    );
     success = true;
-    return { status: "PATCH_DISPATCHED", instanceId, commandId, cveCount: allFindings.length };
+    return { status: "PATCH_DISPATCHED", instanceId, commandId, cveCount: candidateFindings.length };
   } finally {
     if (!success) {
       await releaseLock(instanceId);
@@ -198,31 +203,37 @@ async function acquireLock(instanceId: string): Promise<boolean> {
   }
 }
 
-async function storeFindingIds(instanceId: string, allFindings: any[]) {
-  const findingIds = allFindings.map((f) => ({ Id: f.Id!, ProductArn: f.ProductArn! }));
-  const titles = allFindings.map((f) => f.Title ?? "");
+function extractCveId(finding: any): string | null {
+  const match = (finding.Title ?? "").match(/CVE-\d{4}-\d+/);
+  return match ? match[0] : null;
+}
+
+async function storePatchInfo(instanceId: string, findings: any[]) {
+  const findingIds = findings.map((f) => ({ Id: f.Id!, ProductArn: f.ProductArn! }));
+  const cveIds = findings.map((f) => extractCveId(f)).filter(Boolean);
   await ddb.send(
     new UpdateItemCommand({
       TableName: LOCK_TABLE,
       Key: { instanceId: { S: instanceId } },
-      UpdateExpression: "SET findingIds = :ids, titles = :titles",
+      UpdateExpression: "SET findingIds = :ids, cveIds = :cveIds",
       ExpressionAttributeValues: {
         ":ids": { S: JSON.stringify(findingIds) },
-        ":titles": { S: JSON.stringify(titles) },
+        ":cveIds": { S: JSON.stringify(cveIds) },
       },
     }),
   );
 }
 
-async function getPatchedAt(instanceId: string): Promise<number | null> {
+async function getPatchRecord(instanceId: string): Promise<{ patchedAt: number | null; patchedCveIds: Set<string> }> {
   try {
     const { Item } = await ddb.send(
       new GetItemCommand({ TableName: LOCK_TABLE, Key: { instanceId: { S: `${instanceId}#patched` } } }),
     );
-    const patchedAt = Number(Item?.patchedAt?.N ?? 0);
-    return patchedAt > 0 ? patchedAt : null;
+    const patchedAt = Number(Item?.patchedAt?.N ?? 0) || null;
+    const patchedCveIds = new Set<string>(Item?.cveIds?.S ? JSON.parse(Item.cveIds.S) : []);
+    return { patchedAt, patchedCveIds };
   } catch {
-    return null;
+    return { patchedAt: null, patchedCveIds: new Set() };
   }
 }
 
@@ -230,39 +241,6 @@ async function releaseLock(instanceId: string) {
   try {
     await ddb.send(new DeleteItemCommand({ TableName: LOCK_TABLE, Key: { instanceId: { S: instanceId } } }));
   } catch {}
-}
-
-async function callBedrock(prompt: string, attempt = 0): Promise<any> {
-  try {
-    const res = await bedrock.send(
-      new InvokeModelCommand({
-        modelId: MODEL_ID,
-        contentType: "application/json",
-        accept: "application/json",
-        body: JSON.stringify({
-          anthropic_version: "bedrock-2023-05-31",
-          max_tokens: 512,
-          temperature: 0,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      }),
-    );
-    let text: string = JSON.parse(new TextDecoder().decode(res.body)).content[0].text.trim();
-    if (text.startsWith("```"))
-      text = text
-        .split("\n")
-        .slice(1)
-        .join("\n")
-        .replace(/```\s*$/, "")
-        .trim();
-    return JSON.parse(text);
-  } catch (e: any) {
-    if (e.name === "ThrottlingException" && attempt < 3) {
-      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
-      return callBedrock(prompt, attempt + 1);
-    }
-    throw e;
-  }
 }
 
 async function isInstanceManaged(instanceId: string): Promise<boolean> {
@@ -276,13 +254,20 @@ async function isInstanceManaged(instanceId: string): Promise<boolean> {
   }
 }
 
-async function notify(control: string, resourceId: string, status: string, message: string) {
+async function notify(
+  control: string,
+  resourceId: string,
+  status: string,
+  product: string,
+  threadKey: string,
+  message: string,
+) {
   try {
     await sns.send(
       new PublishCommand({
         TopicArn: SNS_TOPIC_ARN,
         Subject: `[${status}] ${control}`.slice(0, 100),
-        Message: JSON.stringify({ control, resource: resourceId, status, message }, null, 2),
+        Message: JSON.stringify({ control, resource: resourceId, status, product, threadKey, message }, null, 2),
       }),
     );
   } catch {}

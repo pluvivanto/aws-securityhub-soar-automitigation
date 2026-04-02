@@ -64,22 +64,30 @@ async function handleAutomationCallback(event: any) {
 
   const execUrl = `https://${REGION}.console.aws.amazon.com/systems-manager/automation/execution/${executionId}?region=${REGION}`;
   const mappedStatus = STATUS_MAP[status] ?? status;
-  const message =
-    status === "Failed"
-      ? `${docName}\nexecution: ${executionId}\nParams: ${paramSummary}\nError: ${failureMessage}\n<${execUrl}|View in console>`
-      : `${docName}\nexecution: ${executionId}\nParams: ${paramSummary}\n<${execUrl}|View in console>`;
-
+  let resolvedFindings: any[] = [];
   if (status === "Success") {
-    await resolveMatchingFindings(executionId, "RESOLVED", `Remediation confirmed (execution: ${executionId})`);
+    resolvedFindings = await resolveMatchingFindings(
+      executionId,
+      "RESOLVED",
+      `Remediation confirmed (execution: ${executionId})`,
+    );
   } else if (status === "Failed" || status === "TimedOut") {
-    await resolveMatchingFindings(
+    resolvedFindings = await resolveMatchingFindings(
       executionId,
       "NOTIFIED",
       `Remediation ${status.toLowerCase()} (execution: ${executionId}): ${failureMessage.slice(0, 256)}`,
     );
   }
 
-  await notifySns(docName, paramSummary || "unknown", mappedStatus, message);
+  const product = resolvedFindings[0]?.ProductFields?.["aws/securityhub/ProductName"] ?? "";
+  const controlId =
+    resolvedFindings[0]?.Compliance?.SecurityControlId ?? resolvedFindings[0]?.GeneratorId?.split("/").pop() ?? docName;
+  const message =
+    status === "Failed"
+      ? `Error: ${failureMessage}\n<${execUrl}|View in console>`
+      : `Done. <${execUrl}|View in console>`;
+
+  await notifySns(controlId, paramSummary || "unknown", mappedStatus, product, executionId, message);
 }
 
 async function handleRunCommandCallback(event: any) {
@@ -102,21 +110,11 @@ async function handleRunCommandCallback(event: any) {
 
   const cmdUrl = `https://${REGION}.console.aws.amazon.com/systems-manager/run-command/${commandId}?region=${REGION}`;
   const mappedStatus = COMMAND_STATUS_MAP[status] ?? status;
-  const title = `Patch - ${instanceId}`;
+  const title = instanceId;
 
   const findingIds: { Id: string; ProductArn: string }[] = lockItem.findingIds?.S
     ? JSON.parse(lockItem.findingIds.S)
     : [];
-  const titles: string[] = lockItem.titles?.S ? JSON.parse(lockItem.titles.S) : [];
-  const cveList =
-    titles.length > 0
-      ? "\n" +
-        titles
-          .slice(0, 20)
-          .map((t) => `• ${t}`)
-          .join("\n") +
-        (titles.length > 20 ? `\n• ...and ${titles.length - 20} more` : "")
-      : "";
 
   let output = "";
   let nothingToDo = false;
@@ -156,22 +154,32 @@ async function handleRunCommandCallback(event: any) {
   if (!nothingToDo) {
     const message =
       status === "Success"
-        ? `Patched \`${instanceId}\` (${findingIds.length} CVEs)${cveList}\n<${cmdUrl}|View in console>`
-        : `Failed to patch \`${instanceId}\` (${findingIds.length} CVEs)${cveList}\nError: ${output.slice(0, 300)}\n<${cmdUrl}|View in console>`;
-    await notifySns(title, instanceId, mappedStatus, message);
+        ? `Done. <${cmdUrl}|View in console>`
+        : `Error: ${output.slice(0, 500)}\n<${cmdUrl}|View in console>`;
+    await notifySns(title, instanceId, mappedStatus, "Inspector", commandId, message);
   }
 
   try {
+    const newCveIds: string[] = lockItem.cveIds?.S ? JSON.parse(lockItem.cveIds.S) : [];
     await ddb.send(new DeleteItemCommand({ TableName: LOCK_TABLE, Key: { instanceId: { S: instanceId } } }));
     if (status === "Success" && !nothingToDo) {
       const now = Math.floor(Date.now() / 1000);
+      let existingCveIds: string[] = [];
+      try {
+        const { Item: patchedItem } = await ddb.send(
+          new GetItemCommand({ TableName: LOCK_TABLE, Key: { instanceId: { S: `${instanceId}#patched` } } }),
+        );
+        existingCveIds = patchedItem?.cveIds?.S ? JSON.parse(patchedItem.cveIds.S) : [];
+      } catch {}
+      const mergedCveIds = [...new Set([...existingCveIds, ...newCveIds])];
       await ddb.send(
         new PutItemCommand({
           TableName: LOCK_TABLE,
           Item: {
             instanceId: { S: `${instanceId}#patched` },
             patchedAt: { N: String(now) },
-            expiresAt: { N: String(now + 3600) },
+            cveIds: { S: JSON.stringify(mergedCveIds) },
+            expiresAt: { N: String(now + 7 * 24 * 3600) },
           },
         }),
       );
@@ -181,7 +189,12 @@ async function handleRunCommandCallback(event: any) {
   }
 }
 
-async function resolveMatchingFindings(executionId: string, workflowStatus: "RESOLVED" | "NOTIFIED", note: string) {
+async function resolveMatchingFindings(
+  executionId: string,
+  workflowStatus: "RESOLVED" | "NOTIFIED",
+  note: string,
+  attempt = 0,
+): Promise<any[]> {
   const { Findings: findings } = await sechub.send(
     new GetFindingsCommand({
       Filters: {
@@ -193,7 +206,13 @@ async function resolveMatchingFindings(executionId: string, workflowStatus: "RES
     }),
   );
 
-  if (!findings?.length) return;
+  if (!findings?.length) {
+    if (attempt < 4) {
+      await new Promise((r) => setTimeout(r, 3000));
+      return resolveMatchingFindings(executionId, workflowStatus, note, attempt + 1);
+    }
+    return [];
+  }
 
   await sechub.send(
     new BatchUpdateFindingsCommand({
@@ -202,15 +221,24 @@ async function resolveMatchingFindings(executionId: string, workflowStatus: "RES
       Note: { Text: note.slice(0, 512), UpdatedBy: "sechub-auto-remediation" },
     }),
   );
+
+  return findings;
 }
 
-async function notifySns(control: string, resource: string, status: string, message: string) {
+async function notifySns(
+  control: string,
+  resource: string,
+  status: string,
+  product: string,
+  threadKey: string,
+  message: string,
+) {
   try {
     await sns.send(
       new PublishCommand({
         TopicArn: SNS_TOPIC_ARN,
         Subject: `[${status}] ${control}`.slice(0, 100),
-        Message: JSON.stringify({ control, resource, status, message }, null, 2),
+        Message: JSON.stringify({ control, resource, status, product, threadKey, message }, null, 2),
       }),
     );
   } catch (e: any) {

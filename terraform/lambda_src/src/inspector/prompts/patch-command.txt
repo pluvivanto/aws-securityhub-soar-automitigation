@@ -19,4 +19,5 @@ Rules:
 - Extract package names from Title fields (usually "CVE-XXXX-XXXXX - <package>") and VulnerablePackages fields.
 - Use one update command covering all packages, not separate ones per CVE.
 - If you can't determine the packages or OS, set action to "SKIP".
-- Never remove packages, reboot, or change system config.
+- Never remove packages or change system config.
+- Reboot: if any patched package requires a reboot to take effect (kernel, kernel-modules, glibc, systemd, dbus, or similar core system components), append ` && shutdown -r +1 "Security patch reboot"` to the command. This schedules a reboot 1 minute after the patch completes, giving SSM time to report success first. Do NOT reboot for userspace-only patches (openssl, curl, python, etc.).
