@@ -23,6 +23,7 @@ with Diagram(
         dlq_cspm = SQS("DLQ")
         cspm = Lambda("sechub-cspm")
         bedrock_cspm = Bedrock("Bedrock")
+        ddb_cache = Dynamodb("DynamoDB\n(runbook cache)")
         ssm_auto = SystemsManager("SSM\nAutomation")
 
     with Cluster("Inspector path"):
@@ -36,23 +37,27 @@ with Diagram(
     eb_ssm = Eventbridge("EventBridge\n(SSM events)")
     callback = Lambda("sechub-ssm\n-callback")
     sns_topic = SNS("SNS")
+    sqs_slack = SQS("SQS")
+    dlq_slack = SQS("DLQ")
     slack_fn = Lambda("sechub-slack")
     slack = Slack("Slack")
 
     # CSPM flow
     sechub >> eb >> sqs_cspm >> cspm >> bedrock_cspm
     cspm >> ssm_auto
-    sqs_cspm - Edge(style="dashed", label="3 failures") - dlq_cspm
+    cspm - Edge(style="dashed") - ddb_cache
+    sqs_cspm - Edge(style="dashed") - dlq_cspm
 
     # Inspector flow
     eb >> sqs_insp >> inspector >> bedrock_insp
     inspector >> ssm_cmd
     inspector - Edge(style="dashed") - ddb_lock
-    sqs_insp - Edge(style="dashed", label="30 failures") - dlq_insp
+    sqs_insp - Edge(style="dashed") - dlq_insp
 
     # Callback (handles both SSM Automation and Run Command completions)
     ssm_auto >> eb_ssm
     ssm_cmd >> eb_ssm
     eb_ssm >> callback
     callback - Edge(style="dashed") - ddb_lock
-    callback >> sns_topic >> slack_fn >> slack
+    callback >> sns_topic >> sqs_slack >> slack_fn >> slack
+    sqs_slack - Edge(style="dashed") - dlq_slack

@@ -8,10 +8,13 @@ Parameters (name, type, description, required):
 Finding:
 {{finding}}
 
-Respond with ONLY a JSON object (no markdown):
-{
-  "parameters": {"ParamName": ["value"], ...}
-}
+Respond with ONLY a JSON object (no markdown).
+
+Normal case — all required params can be filled:
+{"parameters": {"ParamName": ["value"], ...}}
+
+If a required parameter cannot be determined from the finding, respond instead with:
+{"skip": true, "reason": "..."}
 
 Rules:
 - Values must be string arrays: {"BucketName": ["my-bucket"]}.

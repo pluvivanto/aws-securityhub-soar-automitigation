@@ -1,0 +1,70 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: sechub soar test
+
+Parameters:
+  InstanceCount:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 50
+    Description: Number of Inspector test instances to launch
+
+Resources:
+
+  CspmTestBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "sechub-e2e-cspm-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      Tags:
+        - Key: Purpose
+          Value: e2e-test
+
+  InspectorTestLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: ami-03e091ef64f3907f8   # AL2023 ~1yr old, has unpatched CVEs
+        InstanceType: t3.micro
+        IamInstanceProfile:
+          Name: AmazonSSMRoleForInstancesQuickSetup
+        MetadataOptions:
+          HttpEndpoint: enabled
+          HttpTokens: optional
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: sechub-e2e-test-inspector
+              - Key: Purpose
+                Value: e2e-test
+              - Key: Project
+                Value: sechub-auto-remediation
+
+  InspectorTestAsg:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      MinSize: "0"
+      MaxSize: "50"
+      DesiredCapacity: !Ref InstanceCount
+      AvailabilityZones: !GetAZs ""
+
+      LaunchTemplate:
+        LaunchTemplateId: !Ref InspectorTestLaunchTemplate
+        Version: !GetAtt InspectorTestLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Purpose
+          Value: e2e-test
+          PropagateAtLaunch: false
+
+Outputs:
+  CspmBucket:
+    Value: !Ref CspmTestBucket
+  InspectorAsg:
+    Value: !Ref InspectorTestAsg
+  InstanceCount:
+    Value: !Ref InstanceCount
