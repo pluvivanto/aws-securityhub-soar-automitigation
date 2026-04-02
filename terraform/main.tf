@@ -64,10 +64,15 @@ variable "bedrock_model_id" {
   default = "global.anthropic.claude-opus-4-5-20251101-v1:0"
 }
 
-variable "slack_webhook_url" {
+variable "slack_bot_token" {
   type      = string
   default   = ""
   sensitive = true
+}
+
+variable "slack_channel_id" {
+  type    = string
+  default = ""
 }
 
 variable "enabled_controls" {

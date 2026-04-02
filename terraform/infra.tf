@@ -156,11 +156,11 @@ module "cspm" {
   tracing_mode  = "Active"
 
   environment_variables = {
-    SNS_TOPIC_ARN         = module.sns.topic_arn
-    ENABLED_CONTROLS      = jsonencode(var.enabled_controls)
-    BEDROCK_MODEL_ID      = var.bedrock_model_id
-    LAMBDA_ROLE_ARN       = module.cspm.lambda_role_arn
-    RUNBOOK_CACHE_TABLE   = aws_dynamodb_table.runbook_cache.name
+    SNS_TOPIC_ARN       = module.sns.topic_arn
+    ENABLED_CONTROLS    = jsonencode(var.enabled_controls)
+    BEDROCK_MODEL_ID    = var.bedrock_model_id
+    LAMBDA_ROLE_ARN     = module.cspm.lambda_role_arn
+    RUNBOOK_CACHE_TABLE = aws_dynamodb_table.runbook_cache.name
   }
 
   cloudwatch_logs_retention_in_days = var.log_retention_days
@@ -174,12 +174,12 @@ module "cspm" {
   number_of_policy_jsons = 2
   policy_jsons = [
     templatefile("${path.module}/policies/cspm-handler.json", {
-      partition           = local.partition
-      region              = local.region
-      account_id          = local.account_id
-      sns_topic_arn       = module.sns.topic_arn
-      cspm_queue_arn      = module.sqs_cspm.queue_arn
-      runbook_cache_arn   = aws_dynamodb_table.runbook_cache.arn
+      partition         = local.partition
+      region            = local.region
+      account_id        = local.account_id
+      sns_topic_arn     = module.sns.topic_arn
+      cspm_queue_arn    = module.sqs_cspm.queue_arn
+      runbook_cache_arn = aws_dynamodb_table.runbook_cache.arn
     }),
     file("${path.module}/policies/cspm-remediation.json"),
   ]
