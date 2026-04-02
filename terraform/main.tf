@@ -6,24 +6,13 @@ terraform {
     null    = { source = "hashicorp/null", version = ">= 3.0" }
   }
 
-  backend "s3" {
-    bucket         = "sechub-soar-tfstate-ACCOUNT_ID"
-    key            = "terraform.tfstate"
-    region         = "eu-west-1"
-    dynamodb_table = "sechub-soar-tflock"
-    encrypt        = true
-    profile        = "AWS_PROFILE"
-    assume_role = {
-      role_arn = "arn:aws:iam::ACCOUNT_ID:role/sechub-terraform-deploy"
-    }
-  }
 }
 
 provider "aws" {
   region  = var.aws_region
   profile = var.aws_profile
   assume_role {
-    role_arn = "arn:aws:iam::ACCOUNT_ID:role/sechub-terraform-deploy"
+    role_arn = "arn:aws:iam::${var.account_id}:role/sechub-terraform-deploy"
   }
   default_tags { tags = { Project = "sechub-auto-remediation", ManagedBy = "terraform" } }
 }
@@ -37,6 +26,11 @@ locals {
   region      = data.aws_region.current.id
   partition   = data.aws_partition.current.partition
   name_prefix = "sechub-remediation"
+}
+
+variable "account_id" {
+  type        = string
+  description = "AWS account ID to deploy into"
 }
 
 variable "aws_region" {
