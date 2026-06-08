@@ -10,7 +10,7 @@ module "sqs_cspm" {
   version = "~> 4.0"
 
   name                       = "sechub-cspm-queue"
-  visibility_timeout_seconds = 360
+  visibility_timeout_seconds = var.lambda_timeout + 60
   message_retention_seconds  = 86400
   receive_wait_time_seconds  = 5
   create_dlq                 = true
