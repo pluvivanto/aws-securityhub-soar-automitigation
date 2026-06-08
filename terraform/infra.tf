@@ -98,7 +98,12 @@ module "eventbridge" {
       event_pattern = jsonencode({
         source      = ["aws.securityhub"]
         detail-type = ["Security Hub Findings - Imported"]
-        detail      = { findings = { Workflow = { Status = ["NEW"] }, RecordState = ["ACTIVE"], ProductFields = { "aws/securityhub/ProductName" = ["Inspector"] } } }
+        detail = { findings = {
+          Workflow      = { Status = ["NEW"] },
+          RecordState   = ["ACTIVE"],
+          ProductFields = { "aws/securityhub/ProductName" = ["Inspector"] },
+          Resources     = { Type = ["AwsEc2Instance"] }
+        } }
       })
     }
     ssm_status = {
