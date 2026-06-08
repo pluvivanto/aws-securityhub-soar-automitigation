@@ -4,6 +4,13 @@ const bedrock = new BedrockRuntimeClient({});
 const MODEL_ID = process.env.BEDROCK_MODEL_ID!;
 const REGION = process.env.AWS_REGION ?? "us-east-1";
 
+const RETRYABLE_ERRORS = new Set([
+  "ThrottlingException",
+  "ServiceUnavailableException",
+  "ModelTimeoutException",
+  "InternalServerException",
+]);
+
 export async function callBedrock(prompt: string, maxTokens = 1024, attempt = 0): Promise<any> {
   try {
     const res = await bedrock.send(
@@ -19,7 +26,10 @@ export async function callBedrock(prompt: string, maxTokens = 1024, attempt = 0)
         }),
       }),
     );
-    let text: string = JSON.parse(new TextDecoder().decode(res.body)).content[0].text.trim();
+    const parsed = JSON.parse(new TextDecoder().decode(res.body));
+    const textBlock = (parsed.content ?? []).find((b: any) => b.type === "text");
+    if (!textBlock?.text) throw new Error("Bedrock response missing text block");
+    let text: string = textBlock.text.trim();
     if (text.startsWith("```"))
       text = text
         .split("\n")
@@ -29,7 +39,7 @@ export async function callBedrock(prompt: string, maxTokens = 1024, attempt = 0)
         .trim();
     return JSON.parse(text);
   } catch (e: any) {
-    if (e.name === "ThrottlingException" && attempt < 3) {
+    if (RETRYABLE_ERRORS.has(e.name) && attempt < 3) {
       await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
       return callBedrock(prompt, maxTokens, attempt + 1);
     }
