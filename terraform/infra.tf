@@ -79,6 +79,22 @@ resource "aws_dynamodb_table" "patch_lock" {
   }
 }
 
+resource "aws_dynamodb_table" "slack_state" {
+  name         = "sechub-slack-state"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "threadKey"
+
+  attribute {
+    name = "threadKey"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expiresAt"
+    enabled        = true
+  }
+}
+
 module "eventbridge" {
   source     = "terraform-aws-modules/eventbridge/aws"
   version    = "~> 3.0"

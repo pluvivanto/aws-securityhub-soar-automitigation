@@ -4,7 +4,7 @@ import type { SQSEvent } from "aws-lambda";
 
 const BOT_TOKEN = process.env.SLACK_BOT_TOKEN!;
 const CHANNEL_ID = process.env.SLACK_CHANNEL_ID!;
-const LOCK_TABLE = process.env.LOCK_TABLE!;
+const STATE_TABLE = process.env.SLACK_STATE_TABLE!;
 
 const ddb = new DynamoDBClient({});
 
@@ -172,9 +172,9 @@ async function storeThreadTs(threadKey: string, ts: string) {
   try {
     await ddb.send(
       new PutItemCommand({
-        TableName: LOCK_TABLE,
+        TableName: STATE_TABLE,
         Item: {
-          instanceId: { S: `slack#${threadKey}` },
+          threadKey: { S: threadKey },
           ts: { S: ts },
           expiresAt: { N: String(Math.floor(Date.now() / 1000) + 86400) },
         },
@@ -189,8 +189,8 @@ async function getThreadTs(threadKey: string): Promise<string | undefined> {
   try {
     const { Item } = await ddb.send(
       new GetItemCommand({
-        TableName: LOCK_TABLE,
-        Key: { instanceId: { S: `slack#${threadKey}` } },
+        TableName: STATE_TABLE,
+        Key: { threadKey: { S: threadKey } },
       }),
     );
     return Item?.ts?.S;

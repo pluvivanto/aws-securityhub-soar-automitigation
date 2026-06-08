@@ -4,7 +4,7 @@
     {
       "Effect": "Allow",
       "Action": ["dynamodb:GetItem", "dynamodb:PutItem"],
-      "Resource": "${lock_table_arn}"
+      "Resource": "${slack_state_table_arn}"
     },
     {
       "Effect": "Allow",

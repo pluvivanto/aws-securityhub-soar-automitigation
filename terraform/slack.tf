@@ -59,17 +59,17 @@ module "slack" {
   source_path   = "${path.module}/lambda_src/dist/slack"
 
   environment_variables = {
-    SLACK_BOT_TOKEN  = var.slack_bot_token
-    SLACK_CHANNEL_ID = var.slack_channel_id
-    LOCK_TABLE       = aws_dynamodb_table.patch_lock.name
+    SLACK_BOT_TOKEN   = var.slack_bot_token
+    SLACK_CHANNEL_ID  = var.slack_channel_id
+    SLACK_STATE_TABLE = aws_dynamodb_table.slack_state.name
   }
 
   cloudwatch_logs_retention_in_days = var.log_retention_days
 
   attach_policy_json = true
   policy_json = templatefile("${path.module}/policies/slack-handler.json", {
-    lock_table_arn = aws_dynamodb_table.patch_lock.arn
-    queue_arn      = local.slack_enabled ? aws_sqs_queue.slack[0].arn : ""
+    slack_state_table_arn = aws_dynamodb_table.slack_state.arn
+    queue_arn             = local.slack_enabled ? aws_sqs_queue.slack[0].arn : ""
   })
 
   event_source_mapping = {
