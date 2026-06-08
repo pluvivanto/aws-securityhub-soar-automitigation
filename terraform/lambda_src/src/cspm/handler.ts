@@ -181,7 +181,7 @@ async function getAvailableRunbooks(): Promise<string[]> {
     },
   )) {
     for (const doc of page.DocumentIdentifiers ?? [])
-      if (doc.Name && prefixes.some((p) => doc.Name!.includes(p))) names.push(doc.Name);
+      if (doc.Name && prefixes.some((p) => doc.Name!.startsWith(p))) names.push(doc.Name);
   }
   names.sort();
 
