@@ -28,7 +28,7 @@ module "sqs_inspector" {
   receive_wait_time_seconds  = 5
   create_dlq                 = true
   dlq_name                   = "sechub-inspector-dlq"
-  redrive_policy             = { maxReceiveCount = 30 }
+  redrive_policy             = { maxReceiveCount = 5 }
 }
 
 resource "aws_sqs_queue_policy" "cspm" {
