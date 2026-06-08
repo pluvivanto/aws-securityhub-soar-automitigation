@@ -235,7 +235,9 @@ async function updateFinding(findingId: string, productArn: string, status: stri
         Note: { Text: note.slice(0, 512), UpdatedBy: "sechub-auto-remediation" },
       }),
     );
-  } catch {}
+  } catch (e: any) {
+    console.log(JSON.stringify({ event: "UPDATE_FINDING_FAILED", findingId, status, error: e.message ?? String(e) }));
+  }
 }
 
 async function notify(
@@ -258,5 +260,7 @@ async function notify(
         ),
       }),
     );
-  } catch {}
+  } catch (e: any) {
+    console.log(JSON.stringify({ event: "NOTIFY_FAILED", controlId, status, error: e.message ?? String(e) }));
+  }
 }

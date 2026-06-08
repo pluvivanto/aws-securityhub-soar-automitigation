@@ -105,7 +105,9 @@ async function handleRunCommandCallback(event: any) {
       new GetItemCommand({ TableName: LOCK_TABLE, Key: { instanceId: { S: instanceId } } }),
     );
     lockItem = Item;
-  } catch {}
+  } catch (e: any) {
+    console.log(JSON.stringify({ event: "GET_LOCK_FAILED", instanceId, error: e.message ?? String(e) }));
+  }
   if (!lockItem) return;
 
   const cmdUrl = `https://${REGION}.console.aws.amazon.com/systems-manager/run-command/${commandId}?region=${REGION}`;
@@ -170,7 +172,9 @@ async function handleRunCommandCallback(event: any) {
           new GetItemCommand({ TableName: LOCK_TABLE, Key: { instanceId: { S: `${instanceId}#patched` } } }),
         );
         existingCveIds = patchedItem?.cveIds?.S ? JSON.parse(patchedItem.cveIds.S) : [];
-      } catch {}
+      } catch (e: any) {
+        console.log(JSON.stringify({ event: "GET_PATCHED_HISTORY_FAILED", instanceId, error: e.message ?? String(e) }));
+      }
       const mergedCveIds = [...new Set([...existingCveIds, ...newCveIds])];
       await ddb.send(
         new PutItemCommand({

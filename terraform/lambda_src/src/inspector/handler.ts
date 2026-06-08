@@ -232,7 +232,8 @@ async function getPatchRecord(instanceId: string): Promise<{ patchedAt: number |
     const patchedAt = Number(Item?.patchedAt?.N ?? 0) || null;
     const patchedCveIds = new Set<string>(Item?.cveIds?.S ? JSON.parse(Item.cveIds.S) : []);
     return { patchedAt, patchedCveIds };
-  } catch {
+  } catch (e: any) {
+    console.log(JSON.stringify({ event: "GET_PATCH_RECORD_FAILED", instanceId, error: e.message ?? String(e) }));
     return { patchedAt: null, patchedCveIds: new Set() };
   }
 }
@@ -240,7 +241,9 @@ async function getPatchRecord(instanceId: string): Promise<{ patchedAt: number |
 async function releaseLock(instanceId: string) {
   try {
     await ddb.send(new DeleteItemCommand({ TableName: LOCK_TABLE, Key: { instanceId: { S: instanceId } } }));
-  } catch {}
+  } catch (e: any) {
+    console.log(JSON.stringify({ event: "RELEASE_LOCK_FAILED", instanceId, error: e.message ?? String(e) }));
+  }
 }
 
 async function isInstanceManaged(instanceId: string): Promise<boolean> {
@@ -249,7 +252,8 @@ async function isInstanceManaged(instanceId: string): Promise<boolean> {
       new DescribeInstanceInformationCommand({ Filters: [{ Key: "InstanceIds", Values: [instanceId] }] }),
     );
     return (InstanceInformationList?.length ?? 0) > 0;
-  } catch {
+  } catch (e: any) {
+    console.log(JSON.stringify({ event: "DESCRIBE_INSTANCE_FAILED", instanceId, error: e.message ?? String(e) }));
     return false;
   }
 }
@@ -270,5 +274,7 @@ async function notify(
         Message: JSON.stringify({ control, resource: resourceId, status, product, threadKey, message }, null, 2),
       }),
     );
-  } catch {}
+  } catch (e: any) {
+    console.log(JSON.stringify({ event: "NOTIFY_FAILED", control, status, error: e.message ?? String(e) }));
+  }
 }

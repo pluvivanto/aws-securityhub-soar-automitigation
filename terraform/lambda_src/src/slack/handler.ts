@@ -180,7 +180,9 @@ async function storeThreadTs(threadKey: string, ts: string) {
         },
       }),
     );
-  } catch {}
+  } catch (e: any) {
+    console.log(JSON.stringify({ event: "STORE_THREAD_FAILED", threadKey, error: e.message ?? String(e) }));
+  }
 }
 
 async function getThreadTs(threadKey: string): Promise<string | undefined> {
@@ -192,7 +194,8 @@ async function getThreadTs(threadKey: string): Promise<string | undefined> {
       }),
     );
     return Item?.ts?.S;
-  } catch {
+  } catch (e: any) {
+    console.log(JSON.stringify({ event: "GET_THREAD_FAILED", threadKey, error: e.message ?? String(e) }));
     return undefined;
   }
 }
