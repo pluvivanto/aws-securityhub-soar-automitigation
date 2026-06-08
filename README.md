@@ -38,7 +38,7 @@ slack_channel_id = "C..."
 | `account_id` | — | AWS account ID to deploy into |
 | `aws_region` | `us-east-1` | Where to deploy |
 | `enabled_controls` | `["*"]` | Which CSPM controls to remediate (`["*"]` = all) |
-| `bedrock_model_id` | Opus 4.6 | Which Bedrock model to use |
+| `bedrock_model_id` | Opus 4.5 | Which Bedrock model to use |
 | `slack_bot_token` | `""` | Slack bot token (empty = no Slack) |
 | `slack_channel_id` | `""` | Slack channel ID |
 | `log_retention_days` | `30` | CloudWatch log retention |
