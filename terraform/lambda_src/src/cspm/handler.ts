@@ -47,7 +47,11 @@ export async function handler(event: any) {
   } else if (event.finding) {
     findings.push(event.finding);
   }
-  const results = await Promise.all(findings.map(processFinding));
+  const results = await Promise.all(
+    findings.map((f) =>
+      processFinding(f).catch((e) => ({ status: "FAILED", error: e.message ?? String(e) })),
+    ),
+  );
   return { processed: results.length, results };
 }
 
