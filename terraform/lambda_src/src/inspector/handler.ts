@@ -185,15 +185,17 @@ async function getAllCveFindings(instanceId: string): Promise<any[]> {
 }
 
 async function acquireLock(instanceId: string): Promise<boolean> {
+  const now = Math.floor(Date.now() / 1000);
   try {
     await ddb.send(
       new PutItemCommand({
         TableName: LOCK_TABLE,
         Item: {
           instanceId: { S: instanceId },
-          expiresAt: { N: String(Math.floor(Date.now() / 1000) + 900) },
+          expiresAt: { N: String(now + 900) },
         },
-        ConditionExpression: "attribute_not_exists(instanceId)",
+        ConditionExpression: "attribute_not_exists(instanceId) OR expiresAt < :now",
+        ExpressionAttributeValues: { ":now": { N: String(now) } },
       }),
     );
     return true;
