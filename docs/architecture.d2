@@ -1,0 +1,94 @@
+direction: right
+
+vars: {
+  ic-lambda: https://icons.terrastruct.com/aws%2FCompute%2FAWS-Lambda.svg
+  ic-ec2: https://icons.terrastruct.com/aws%2FCompute%2FAmazon-EC2.svg
+  ic-ddb: https://icons.terrastruct.com/aws%2FDatabase%2FAmazon-DynamoDB.svg
+  ic-sqs: https://icons.terrastruct.com/aws%2FApplication%20Integration%2FAmazon-Simple-Queue-Service-SQS.svg
+  ic-sns: https://icons.terrastruct.com/aws%2FApplication%20Integration%2FAmazon-Simple-Notification-Service-SNS.svg
+  ic-eb: https://icons.terrastruct.com/aws%2FApplication%20Integration%2FAmazon-EventBridge.svg
+  ic-ssm: https://icons.terrastruct.com/aws%2FManagement%20%26%20Governance%2FAWS-Systems-Manager.svg
+  ic-cw: https://icons.terrastruct.com/aws%2FManagement%20%26%20Governance%2FAmazon-CloudWatch.svg
+  ic-config: https://icons.terrastruct.com/aws%2FManagement%20%26%20Governance%2FAWS-Config.svg
+  ic-sechub: https://icons.terrastruct.com/aws%2FSecurity%2C%20Identity%2C%20%26%20Compliance%2FAWS-Security-Hub.svg
+  ic-gd: https://icons.terrastruct.com/aws%2FSecurity%2C%20Identity%2C%20%26%20Compliance%2FAmazon-GuardDuty.svg
+  ic-insp: https://icons.terrastruct.com/aws%2FSecurity%2C%20Identity%2C%20%26%20Compliance%2FAmazon-Inspector.svg
+  ic-macie: https://icons.terrastruct.com/aws%2FSecurity%2C%20Identity%2C%20%26%20Compliance%2FAmazon-Macie.svg
+  ic-fwm: https://icons.d2lang.com/aws%2FSecurity%2C%20Identity%2C%20%26%20Compliance%2FAWS-Firewall-Manager.svg
+  ic-iam: https://icons.terrastruct.com/aws%2FSecurity%2C%20Identity%2C%20%26%20Compliance%2FAWS-Identify-and-Access-Management_IAM.svg
+  ic-xray: https://icons.terrastruct.com/aws%2FDeveloper%20Tools%2FAWS-X-Ray.svg
+  ic-bedrock: https://icons.terrastruct.com/aws%2FMachine%20Learning%2FAmazon-SageMaker.svg
+  ic-slack: https://icons.terrastruct.com/dev%2Fslack.svg
+}
+
+classes: {
+  svc: { shape: image; width: 64; height: 64 }
+  grp: {
+    style: { fill: transparent; stroke: "#3B4149"; stroke-width: 3; border-radius: 0; font-size: 18 }
+  }
+  dash: { style: { stroke: "#8A94A0"; stroke-dash: 5 } }
+}
+
+sources: finding sources {
+  class: grp
+  config: Config { class: svc; icon: ${ic-config} }
+  gd: GuardDuty { class: svc; icon: ${ic-gd} }
+  insp: Inspector { class: svc; icon: ${ic-insp} }
+  macie: Macie { class: svc; icon: ${ic-macie} }
+  fwm: Firewall Manager { class: svc; icon: ${ic-fwm} }
+}
+
+sechub: Security Hub { class: svc; icon: ${ic-sechub} }
+router: EventBridge\nfinding router { class: svc; icon: ${ic-eb} }
+
+cspm: CSPM path {
+  class: grp
+  q: SQS\nCSPM queue { class: svc; icon: ${ic-sqs} }
+  fn: Lambda\nsechub-cspm { class: svc; icon: ${ic-lambda} }
+  sm: SSM\nAutomation { class: svc; icon: ${ic-ssm} }
+  dlq: SQS\nCSPM DLQ { class: svc; icon: ${ic-sqs} }
+  cache: DynamoDB\nrunbook-cache { class: svc; icon: ${ic-ddb} }
+  br: Bedrock\npick runbook { class: svc; icon: ${ic-bedrock} }
+  q -> fn -> sm
+  q -> dlq { class: dash }
+  fn -> cache { class: dash }
+  fn -> br { class: dash }
+}
+
+inspector: Inspector path {
+  class: grp
+  q: SQS\nInspector queue { class: svc; icon: ${ic-sqs} }
+  fn: Lambda\nsechub-inspector { class: svc; icon: ${ic-lambda} }
+  sm: SSM\nRun Command { class: svc; icon: ${ic-ssm} }
+  ec2: EC2 fleet { class: svc; icon: ${ic-ec2} }
+  dlq: SQS\nInspector DLQ { class: svc; icon: ${ic-sqs} }
+  lock: DynamoDB\npatch-lock { class: svc; icon: ${ic-ddb} }
+  br: Bedrock\npatch command { class: svc; icon: ${ic-bedrock} }
+  q -> fn -> sm -> ec2
+  q -> dlq { class: dash }
+  fn -> lock { class: dash }
+  fn -> br { class: dash }
+}
+
+events: EventBridge\nSSM events { class: svc; icon: ${ic-eb} }
+callback: Lambda\nssm-callback { class: svc; icon: ${ic-lambda} }
+sns: SNS { class: svc; icon: ${ic-sns} }
+slackq: SQS\nSlack queue { class: svc; icon: ${ic-sqs} }
+slackfn: Lambda\nsechub-slack { class: svc; icon: ${ic-lambda} }
+slack: Slack { class: svc; icon: ${ic-slack} }
+sstate: DynamoDB\nslack-state { class: svc; icon: ${ic-ddb} }
+sechub2: Security Hub { class: svc; icon: ${ic-sechub} }
+
+sources.config -> sechub
+sources.gd -> sechub
+sources.insp -> sechub
+sources.macie -> sechub
+sources.fwm -> sechub
+sechub -> router
+router -> cspm.q
+router -> inspector.q
+cspm.sm -> events
+inspector.sm -> events
+events -> callback -> sns -> slackq -> slackfn -> slack
+slackfn -> sstate { class: dash }
+callback -> sechub2: resolve { style.stroke: "#2563EB"; style.stroke-width: 2 }

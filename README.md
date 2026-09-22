@@ -2,12 +2,12 @@
 
 Auto-fixes AWS Security Hub findings using Bedrock to pick the right remediation. No static mapping needed. New controls and CVEs are handled without code changes.
 
-![Architecture](./docs/architecture.png)
+![Architecture](./docs/architecture.svg)
 
 ## Lambdas
 
 | Name | Purpose |
-|---|---|
+| --- | --- |
 | `sechub-cspm` | Asks Bedrock which SSM runbook to run, then runs it |
 | `sechub-inspector` | Asks Bedrock for the right patch command, runs it via SSM |
 | `sechub-ssm-callback` | Picks up SSM completion events, resolves findings, sends to SNS |
@@ -34,7 +34,7 @@ slack_channel_id = "C..."
 ## Variables
 
 | Name | Default | What it does |
-|---|---|---|
+| --- | --- | --- |
 | `account_id` | — | AWS account ID to deploy into |
 | `aws_region` | `us-east-1` | Where to deploy |
 | `enabled_controls` | `["*"]` | Which CSPM controls to remediate (`["*"]` = all) |
