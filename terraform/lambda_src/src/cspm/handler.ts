@@ -70,6 +70,12 @@ async function processFinding(finding: any) {
 
   if (!isControlEnabled(controlId)) return { control: controlId, status: "SKIPPED", reason: "not enabled" };
 
+  const workflowStatus = finding.Workflow?.Status ?? "NEW";
+  if (workflowStatus !== "NEW") {
+    console.log(JSON.stringify({ event: "ALREADY_PROCESSED", controlId, resourceId, findingId, workflowStatus }));
+    return { control: controlId, status: "SKIPPED", reason: `already ${workflowStatus}` };
+  }
+
   const result = await askBedrockForRunbook(finding);
   console.log(
     JSON.stringify({
