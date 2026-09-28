@@ -69,13 +69,13 @@ async function handleAutomationCallback(event: any) {
     resolvedFindings = await resolveMatchingFindings(
       executionId,
       "RESOLVED",
-      `Remediation confirmed (execution: ${executionId})`,
+      `resolved by ${executionId}`,
     );
   } else if (status === "Failed" || status === "TimedOut") {
     resolvedFindings = await resolveMatchingFindings(
       executionId,
       "NOTIFIED",
-      `Remediation ${status.toLowerCase()} (execution: ${executionId}): ${failureMessage.slice(0, 256)}`,
+      `${status.toLowerCase()} ${executionId}: ${failureMessage.slice(0, 256)}`,
     );
   }
 
@@ -96,7 +96,7 @@ async function handleRunCommandCallback(event: any) {
   const docName = event.detail?.["document-name"] ?? "";
   const instanceId = event.detail?.["instance-id"] ?? "unknown";
 
-  if (docName !== "AWS-RunShellScript") return;
+  if (docName !== "AWS-RunPatchBaseline") return;
   if (!LOCK_TABLE || instanceId === "unknown") return;
 
   let lockItem: Record<string, any> | undefined;
@@ -138,7 +138,7 @@ async function handleRunCommandCallback(event: any) {
             new BatchUpdateFindingsCommand({
               FindingIdentifiers: findingIds.slice(i, i + 100),
               Workflow: { Status: "RESOLVED" },
-              Note: { Text: `Patch completed (command: ${commandId})`, UpdatedBy: "sechub-auto-remediation" },
+              Note: { Text: `patched via ${commandId}`, UpdatedBy: "sechub-auto-remediation" },
             }),
           );
         }

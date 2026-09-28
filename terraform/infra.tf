@@ -168,7 +168,7 @@ module "cspm" {
   version = "~> 7.0"
 
   function_name = "sechub-cspm"
-  description   = "Handles CSPM findings — asks Bedrock for the right SSM runbook and runs it"
+  description   = "Handles CSPM findings"
   handler       = "handler.handler"
   runtime       = "nodejs22.x"
   timeout       = var.lambda_timeout
@@ -215,14 +215,14 @@ module "inspector" {
   version = "~> 7.0"
 
   function_name = "sechub-inspector"
-  description   = "Handles Inspector CVEs — asks Bedrock for the patch command and runs it via SSM"
+  description   = "Handles Inspector CVEs"
   handler       = "handler.handler"
   runtime       = "nodejs22.x"
   timeout       = 60
   memory_size   = 128
   source_path   = "${path.module}/lambda_src/dist/inspector"
 
-  environment_variables             = { SNS_TOPIC_ARN = module.sns.topic_arn, BEDROCK_MODEL_ID = var.bedrock_model_id, LOCK_TABLE = aws_dynamodb_table.patch_lock.name, ACCOUNT_ID = local.account_id }
+  environment_variables             = { SNS_TOPIC_ARN = module.sns.topic_arn, LOCK_TABLE = aws_dynamodb_table.patch_lock.name, ACCOUNT_ID = local.account_id }
   cloudwatch_logs_retention_in_days = var.log_retention_days
 
   event_source_mapping = {

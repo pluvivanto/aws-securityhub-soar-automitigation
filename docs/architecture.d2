@@ -59,15 +59,13 @@ inspector: Inspector path {
   class: grp
   q: SQS\nInspector queue { class: svc; icon: ${ic-sqs} }
   fn: Lambda\nsechub-inspector { class: svc; icon: ${ic-lambda} }
-  sm: SSM\nRun Command { class: svc; icon: ${ic-ssm} }
+  sm: SSM\nRunPatchBaseline { class: svc; icon: ${ic-ssm} }
   ec2: EC2 fleet { class: svc; icon: ${ic-ec2} }
   dlq: SQS\nInspector DLQ { class: svc; icon: ${ic-sqs} }
   lock: DynamoDB\npatch-lock { class: svc; icon: ${ic-ddb} }
-  br: Bedrock\npatch command { class: svc; icon: ${ic-bedrock} }
   q -> fn -> sm -> ec2
   q -> dlq { class: dash }
   fn -> lock { class: dash }
-  fn -> br { class: dash }
 }
 
 events: EventBridge\nSSM events { class: svc; icon: ${ic-eb} }

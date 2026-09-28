@@ -3,11 +3,16 @@
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": [
-        "ssm:SendCommand",
-        "ssm:DescribeInstanceInformation"
-      ],
+      "Action": "ssm:DescribeInstanceInformation",
       "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:${partition}:ssm:${region}::document/AWS-RunPatchBaseline",
+        "arn:${partition}:ec2:${region}:${account_id}:instance/*"
+      ]
     },
     {
       "Effect": "Allow",
@@ -22,14 +27,6 @@
         "sqs:GetQueueAttributes"
       ],
       "Resource": "${inspector_queue_arn}"
-    },
-    {
-      "Effect": "Allow",
-      "Action": "bedrock:InvokeModel",
-      "Resource": [
-        "arn:${partition}:bedrock:*::foundation-model/*",
-        "arn:${partition}:bedrock:*:${account_id}:inference-profile/*"
-      ]
     },
     {
       "Effect": "Allow",

@@ -7,7 +7,6 @@ const shared = {
   target: "node22",
   format: "esm",
   outExtension: { ".js": ".mjs" },
-  // AWS SDK is available in the Lambda runtime, no need to bundle it
   external: [
     "@aws-sdk/*",
   ],
@@ -26,4 +25,3 @@ for (const h of handlers) {
 
 // esbuild doesn't handle non-code files, so copy prompts
 cpSync("src/cspm/prompts", "dist/cspm/prompts", { recursive: true });
-cpSync("src/inspector/prompts", "dist/inspector/prompts", { recursive: true });

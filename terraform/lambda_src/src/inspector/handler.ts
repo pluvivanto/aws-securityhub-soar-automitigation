@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   DeleteItemCommand,
   DynamoDBClient,
@@ -11,10 +8,7 @@ import {
 import { BatchUpdateFindingsCommand, GetFindingsCommand, SecurityHubClient } from "@aws-sdk/client-securityhub";
 import { PublishCommand, SNSClient } from "@aws-sdk/client-sns";
 import { DescribeInstanceInformationCommand, SendCommandCommand, SSMClient } from "@aws-sdk/client-ssm";
-import { callBedrock, sechubFindingUrl } from "../shared/bedrock.js";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROMPT = readFileSync(join(__dirname, "prompts", "patch-command.txt"), "utf-8");
+import { sechubFindingUrl } from "../shared/bedrock.js";
 
 const ssm = new SSMClient({});
 const sns = new SNSClient({});
@@ -62,7 +56,7 @@ async function processFinding(triggerFinding: any) {
 
   console.log(JSON.stringify({ event: "PATCH_REQUESTED", instanceId, title: triggerFinding.Title }));
 
-  // Acquire lock — if another invocation is patching this instance, fail so SQS retries
+  // Acquire lock - if another invocation is patching this instance, fail so SQS retries
   const locked = await acquireLock(instanceId);
   if (!locked) {
     throw new Error(`${instanceId} is locked, retry pending`);
@@ -102,22 +96,6 @@ async function processFinding(triggerFinding: any) {
 
     console.log(JSON.stringify({ event: "BATCH_PATCH", instanceId, count: candidateFindings.length }));
 
-    const summaries = candidateFindings.map((f) => ({
-      Title: f.Title ?? "",
-      RemediationText: f.Remediation?.Recommendation?.Text ?? "",
-      VulnerablePackages: (f.Vulnerabilities ?? []).flatMap((v: any) => v.VulnerablePackages ?? []),
-    }));
-
-    const decision: Record<string, string> = await callBedrock(
-      PROMPT.replace("{{findings}}", JSON.stringify(summaries, null, 2)),
-      512,
-    );
-    console.log(JSON.stringify({ event: "BEDROCK_PATCH_DECISION", instanceId, ...decision }));
-
-    if (decision.action !== "PATCH") {
-      return { status: "SKIPPED", reason: decision.reason };
-    }
-
     const findingIds = candidateFindings.map((f) => ({ Id: f.Id!, ProductArn: f.ProductArn! }));
     await storePatchInfo(instanceId, candidateFindings);
 
@@ -134,8 +112,8 @@ async function processFinding(triggerFinding: any) {
     const { Command } = await ssm.send(
       new SendCommandCommand({
         InstanceIds: [instanceId],
-        DocumentName: "AWS-RunShellScript",
-        Parameters: { commands: [decision.command] },
+        DocumentName: "AWS-RunPatchBaseline",
+        Parameters: { Operation: ["Install"], RebootOption: ["NoReboot"] },
         TimeoutSeconds: 600,
         Comment: `Auto-patch: ${candidateFindings.length} CVEs on ${instanceId}`,
       }),
@@ -149,7 +127,7 @@ async function processFinding(triggerFinding: any) {
       "PATCH_STARTED",
       "Inspector",
       commandId,
-      `Patching ${candidateFindings.length} CVEs on \`${instanceId}\`${cveList}\n<${ssmCommandUrl(commandId)}|View in console>`,
+      `Patching ${candidateFindings.length} CVEs on \`${instanceId}\`${cveList}\n_reboot deferred_\n<${ssmCommandUrl(commandId)}|View in console>`,
     );
     console.log(
       JSON.stringify({ event: "PATCH_DISPATCHED", instanceId, commandId, cveCount: candidateFindings.length }),
