@@ -9,8 +9,9 @@ Auto-fixes AWS Security Hub findings using Bedrock to pick the right remediation
 | Name | Purpose |
 | --- | --- |
 | `sechub-cspm` | Asks Bedrock which SSM runbook to run, then runs it |
-| `sechub-inspector` | Patches CVE-affected EC2 instances via SSM `AWS-RunPatchBaseline` |
+| `sechub-inspector` | Patches CVE-affected EC2 instances via SSM |
 | `sechub-ssm-callback` | Picks up SSM completion events, resolves findings, sends to SNS |
+| `sechub-unhandled` | Sends HIGH+ findings with no handler to Slack |
 | `sechub-slack` | Forwards SNS messages to Slack |
 
 ## Getting started

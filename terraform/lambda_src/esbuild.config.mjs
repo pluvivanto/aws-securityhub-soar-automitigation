@@ -4,7 +4,7 @@ import { cpSync } from "fs";
 const shared = {
   bundle: true,
   platform: "node",
-  target: "node22",
+  target: "node24",
   format: "esm",
   outExtension: { ".js": ".mjs" },
   external: [
@@ -17,6 +17,7 @@ const handlers = [
   { entry: "src/inspector/handler.ts", out: "dist/inspector/handler" },
   { entry: "src/ssm-callback/handler.ts", out: "dist/ssm-callback/handler" },
   { entry: "src/slack/handler.ts", out: "dist/slack/handler" },
+  { entry: "src/unhandled/handler.ts", out: "dist/unhandled/handler" },
 ];
 
 for (const h of handlers) {

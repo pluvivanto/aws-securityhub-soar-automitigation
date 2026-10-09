@@ -1,5 +1,5 @@
 locals {
-  alarm_lambdas = ["sechub-cspm", "sechub-inspector", "sechub-ssm-callback"]
+  alarm_lambdas = ["sechub-cspm", "sechub-inspector", "sechub-ssm-callback", "sechub-unhandled"]
   alarm_dlqs    = ["sechub-cspm-dlq", "sechub-inspector-dlq"]
   alarm_queues  = ["sechub-cspm-queue", "sechub-inspector-queue"]
 }

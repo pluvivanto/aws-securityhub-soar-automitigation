@@ -105,8 +105,8 @@ module "eventbridge" {
       description = "CSPM findings → SQS"
       event_pattern = jsonencode({
         source      = ["aws.securityhub"]
-        detail-type = ["Security Hub Findings - Imported", "Security Hub Findings - Custom"]
-        detail      = { findings = { Workflow = { Status = ["NEW"] }, RecordState = ["ACTIVE"], ProductFields = { "aws/securityhub/ProductName" = [{ "anything-but" = ["Inspector", "Systems Manager Patch Manager"] }] } } }
+        detail-type = ["Security Hub Findings - Imported"]
+        detail      = { findings = { Workflow = { Status = ["NEW"] }, RecordState = ["ACTIVE"], ProductFields = { "aws/securityhub/ProductName" = ["Security Hub"] } } }
       })
     }
     inspector = {
@@ -119,6 +119,22 @@ module "eventbridge" {
           RecordState   = ["ACTIVE"],
           ProductFields = { "aws/securityhub/ProductName" = ["Inspector"] },
           Resources     = { Type = ["AwsEc2Instance"] }
+        } }
+      })
+    }
+    unhandled = {
+      description = "Findings with no handler → Slack"
+      event_pattern = jsonencode({
+        source      = ["aws.securityhub"]
+        detail-type = ["Security Hub Findings - Imported"]
+        detail = { findings = {
+          Workflow    = { Status = ["NEW"] },
+          RecordState = ["ACTIVE"],
+          Severity    = { Label = ["HIGH", "CRITICAL"] },
+          "$or" = [
+            { ProductFields = { "aws/securityhub/ProductName" = [{ "anything-but" = ["Security Hub", "Inspector", "Systems Manager Patch Manager"] }] } },
+            { ProductFields = { "aws/securityhub/ProductName" = ["Inspector"] }, Resources = { Type = [{ "anything-but" = ["AwsEc2Instance"] }] } }
+          ]
         } }
       })
     }
@@ -143,6 +159,7 @@ module "eventbridge" {
   targets = {
     cspm        = [{ name = "cspm-queue", arn = module.sqs_cspm.queue_arn }]
     inspector   = [{ name = "inspector-queue", arn = module.sqs_inspector.queue_arn }]
+    unhandled   = [{ name = "unhandled", arn = module.unhandled.lambda_function_arn }]
     ssm_status  = [{ name = "ssm-callback", arn = module.ssm_callback.lambda_function_arn }]
     ssm_command = [{ name = "ssm-cmd-callback", arn = module.ssm_callback.lambda_function_arn }]
   }
@@ -170,7 +187,7 @@ module "cspm" {
   function_name = "sechub-cspm"
   description   = "Handles CSPM findings"
   handler       = "handler.handler"
-  runtime       = "nodejs22.x"
+  runtime       = "nodejs24.x"
   timeout       = var.lambda_timeout
   memory_size   = 256
   source_path   = "${path.module}/lambda_src/dist/cspm"
@@ -217,7 +234,7 @@ module "inspector" {
   function_name = "sechub-inspector"
   description   = "Handles Inspector CVEs"
   handler       = "handler.handler"
-  runtime       = "nodejs22.x"
+  runtime       = "nodejs24.x"
   timeout       = 60
   memory_size   = 128
   source_path   = "${path.module}/lambda_src/dist/inspector"
@@ -251,7 +268,7 @@ module "ssm_callback" {
   function_name = "sechub-ssm-callback"
   description   = "Handles SSM Automation and Run Command completion events"
   handler       = "handler.handler"
-  runtime       = "nodejs22.x"
+  runtime       = "nodejs24.x"
   timeout       = 30
   memory_size   = 128
   source_path   = "${path.module}/lambda_src/dist/ssm-callback"
@@ -271,6 +288,38 @@ module "ssm_callback" {
   allowed_triggers = {
     eventbridge_automation = { principal = "events.amazonaws.com", source_arn = module.eventbridge.eventbridge_rule_arns["ssm_status"] }
     eventbridge_command    = { principal = "events.amazonaws.com", source_arn = module.eventbridge.eventbridge_rule_arns["ssm_command"] }
+  }
+
+  create_current_version_allowed_triggers = false
+  depends_on                              = [null_resource.lambda_build]
+}
+
+
+module "unhandled" {
+  source  = "terraform-aws-modules/lambda/aws"
+  version = "~> 7.0"
+
+  function_name = "sechub-unhandled"
+  description   = "Sends findings with no handler to Slack"
+  handler       = "handler.handler"
+  runtime       = "nodejs24.x"
+  timeout       = 30
+  memory_size   = 128
+  source_path   = "${path.module}/lambda_src/dist/unhandled"
+
+  environment_variables             = { SNS_TOPIC_ARN = module.sns.topic_arn }
+  cloudwatch_logs_retention_in_days = var.log_retention_days
+
+  attach_policy_json = true
+  policy_json = templatefile("${path.module}/policies/unhandled-handler.json", {
+    sns_topic_arn = module.sns.topic_arn
+    partition     = local.partition
+    region        = local.region
+    account_id    = local.account_id
+  })
+
+  allowed_triggers = {
+    eventbridge = { principal = "events.amazonaws.com", source_arn = module.eventbridge.eventbridge_rule_arns["unhandled"] }
   }
 
   create_current_version_allowed_triggers = false

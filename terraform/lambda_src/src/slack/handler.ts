@@ -19,6 +19,7 @@ const STATUS_EMOJI: Record<string, string> = {
   REMEDIATION_FAILED: ":x:",
   REMEDIATION_TIMED_OUT: ":hourglass:",
   REMEDIATION_CANCELLED: ":no_entry_sign:",
+  UNHANDLED: ":inbox_tray:",
 };
 
 const START_STATUSES = new Set(["STARTED", "PATCH_STARTED"]);
