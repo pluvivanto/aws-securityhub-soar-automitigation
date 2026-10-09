@@ -105,8 +105,8 @@ module "eventbridge" {
       description = "CSPM findings → SQS"
       event_pattern = jsonencode({
         source      = ["aws.securityhub"]
-        detail-type = ["Security Hub Findings - Imported", "Security Hub Findings - Custom"]
-        detail      = { findings = { Workflow = { Status = ["NEW"] }, RecordState = ["ACTIVE"], ProductFields = { "aws/securityhub/ProductName" = [{ "anything-but" = ["Inspector", "Systems Manager Patch Manager"] }] } } }
+        detail-type = ["Security Hub Findings - Imported"]
+        detail      = { findings = { Workflow = { Status = ["NEW"] }, RecordState = ["ACTIVE"], ProductFields = { "aws/securityhub/ProductName" = ["Security Hub"] } } }
       })
     }
     inspector = {
