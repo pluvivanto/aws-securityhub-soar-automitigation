@@ -4,7 +4,7 @@ import { cpSync } from "fs";
 const shared = {
   bundle: true,
   platform: "node",
-  target: "node22",
+  target: "node24",
   format: "esm",
   outExtension: { ".js": ".mjs" },
   external: [

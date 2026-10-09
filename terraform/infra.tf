@@ -184,7 +184,7 @@ module "cspm" {
   function_name = "sechub-cspm"
   description   = "Handles CSPM findings"
   handler       = "handler.handler"
-  runtime       = "nodejs22.x"
+  runtime       = "nodejs24.x"
   timeout       = var.lambda_timeout
   memory_size   = 256
   source_path   = "${path.module}/lambda_src/dist/cspm"
@@ -231,7 +231,7 @@ module "inspector" {
   function_name = "sechub-inspector"
   description   = "Handles Inspector CVEs"
   handler       = "handler.handler"
-  runtime       = "nodejs22.x"
+  runtime       = "nodejs24.x"
   timeout       = 60
   memory_size   = 128
   source_path   = "${path.module}/lambda_src/dist/inspector"
@@ -265,7 +265,7 @@ module "ssm_callback" {
   function_name = "sechub-ssm-callback"
   description   = "Handles SSM Automation and Run Command completion events"
   handler       = "handler.handler"
-  runtime       = "nodejs22.x"
+  runtime       = "nodejs24.x"
   timeout       = 30
   memory_size   = 128
   source_path   = "${path.module}/lambda_src/dist/ssm-callback"
@@ -299,7 +299,7 @@ module "unhandled" {
   function_name = "sechub-unhandled"
   description   = "Sends findings with no handler to Slack"
   handler       = "handler.handler"
-  runtime       = "nodejs22.x"
+  runtime       = "nodejs24.x"
   timeout       = 30
   memory_size   = 128
   source_path   = "${path.module}/lambda_src/dist/unhandled"

@@ -53,7 +53,7 @@ module "slack" {
   function_name = "sechub-slack"
   description   = "Forwards SNS remediation messages to Slack"
   handler       = "handler.handler"
-  runtime       = "nodejs22.x"
+  runtime       = "nodejs24.x"
   timeout       = 30
   memory_size   = 128
   source_path   = "${path.module}/lambda_src/dist/slack"
