@@ -25,6 +25,13 @@ terraform init
 terraform apply
 ```
 
+Required variables go in `terraform.tfvars`:
+
+```hcl
+account_id       = "123456789012"
+bedrock_model_id = "global.anthropic.claude-opus-4-5-20251101-v1:0"
+```
+
 Slack is optional. To enable it, add to `terraform.tfvars`:
 
 ```hcl
@@ -39,7 +46,7 @@ slack_channel_id = "C..."
 | `account_id` | — | AWS account ID to deploy into |
 | `aws_region` | `us-east-1` | Where to deploy |
 | `enabled_controls` | `["*"]` | Which CSPM controls to remediate (`["*"]` = all) |
-| `bedrock_model_id` | Opus 4.5 | Which Bedrock model to use |
+| `bedrock_model_id` | — | Which Bedrock model to use |
 | `slack_bot_token` | `""` | Slack bot token (empty = no Slack) |
 | `slack_channel_id` | `""` | Slack channel ID |
 | `log_retention_days` | `30` | CloudWatch log retention |
