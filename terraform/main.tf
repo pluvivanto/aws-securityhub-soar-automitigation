@@ -54,8 +54,8 @@ variable "lambda_timeout" {
 }
 
 variable "bedrock_model_id" {
-  type    = string
-  default = "global.anthropic.claude-opus-4-5-20251101-v1:0"
+  type        = string
+  description = "Bedrock model ID"
 }
 
 variable "slack_bot_token" {
