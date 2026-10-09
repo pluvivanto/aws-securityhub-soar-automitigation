@@ -1,0 +1,17 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SNS",
+      "Effect": "Allow",
+      "Action": "sns:Publish",
+      "Resource": "${sns_topic_arn}"
+    },
+    {
+      "Sid": "SecurityHub",
+      "Effect": "Allow",
+      "Action": "securityhub:BatchUpdateFindings",
+      "Resource": "arn:${partition}:securityhub:${region}:${account_id}:hub/default"
+    }
+  ]
+}
