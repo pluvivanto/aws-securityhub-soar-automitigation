@@ -70,6 +70,7 @@ inspector: Inspector path {
 
 events: EventBridge\nSSM events { class: svc; icon: ${ic-eb} }
 callback: Lambda\nssm-callback { class: svc; icon: ${ic-lambda} }
+unhandled: Lambda\nsechub-unhandled { class: svc; icon: ${ic-lambda} }
 sns: SNS { class: svc; icon: ${ic-sns} }
 slackq: SQS\nSlack queue { class: svc; icon: ${ic-sqs} }
 slackfn: Lambda\nsechub-slack { class: svc; icon: ${ic-lambda} }
@@ -85,6 +86,8 @@ sources.fwm -> sechub
 sechub -> router
 router -> cspm.q
 router -> inspector.q
+router -> unhandled: no handler, HIGH+ { class: dash }
+unhandled -> sns
 cspm.sm -> events
 inspector.sm -> events
 events -> callback -> sns -> slackq -> slackfn -> slack
