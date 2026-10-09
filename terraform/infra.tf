@@ -128,10 +128,13 @@ module "eventbridge" {
         source      = ["aws.securityhub"]
         detail-type = ["Security Hub Findings - Imported"]
         detail = { findings = {
-          Workflow      = { Status = ["NEW"] },
-          RecordState   = ["ACTIVE"],
-          Severity      = { Label = ["HIGH", "CRITICAL"] },
-          ProductFields = { "aws/securityhub/ProductName" = [{ "anything-but" = ["Security Hub", "Inspector", "Systems Manager Patch Manager"] }] }
+          Workflow    = { Status = ["NEW"] },
+          RecordState = ["ACTIVE"],
+          Severity    = { Label = ["HIGH", "CRITICAL"] },
+          "$or" = [
+            { ProductFields = { "aws/securityhub/ProductName" = [{ "anything-but" = ["Security Hub", "Inspector", "Systems Manager Patch Manager"] }] } },
+            { ProductFields = { "aws/securityhub/ProductName" = ["Inspector"] }, Resources = { Type = [{ "anything-but" = ["AwsEc2Instance"] }] } }
+          ]
         } }
       })
     }
