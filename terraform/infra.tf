@@ -180,6 +180,27 @@ resource "null_resource" "lambda_build" {
   }
 }
 
+resource "aws_iam_role" "cspm_automation" {
+  name = "sechub-cspm-automation"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ssm.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+      Condition = {
+        StringEquals = { "aws:SourceAccount" = local.account_id }
+        ArnLike      = { "aws:SourceArn" = "arn:${local.partition}:ssm:*:${local.account_id}:automation-execution/*" }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "cspm_automation" {
+  role   = aws_iam_role.cspm_automation.id
+  policy = file("${path.module}/policies/cspm-remediation.json")
+}
+
 module "cspm" {
   source  = "terraform-aws-modules/lambda/aws"
   version = "~> 7.0"
@@ -197,19 +218,18 @@ module "cspm" {
     SNS_TOPIC_ARN       = module.sns.topic_arn
     ENABLED_CONTROLS    = jsonencode(var.enabled_controls)
     BEDROCK_MODEL_ID    = var.bedrock_model_id
-    LAMBDA_ROLE_ARN     = module.cspm.lambda_role_arn
+    AUTOMATION_ROLE_ARN = aws_iam_role.cspm_automation.arn
     RUNBOOK_CACHE_TABLE = aws_dynamodb_table.runbook_cache.name
   }
 
   cloudwatch_logs_retention_in_days = var.log_retention_days
-  trusted_entities                  = ["ssm.amazonaws.com"]
 
   event_source_mapping = {
     sqs = { event_source_arn = module.sqs_cspm.queue_arn, function_response_types = ["ReportBatchItemFailures"], batch_size = 1 }
   }
 
   attach_policy_jsons    = true
-  number_of_policy_jsons = 2
+  number_of_policy_jsons = 1
   policy_jsons = [
     templatefile("${path.module}/policies/cspm-handler.json", {
       partition         = local.partition
@@ -219,7 +239,6 @@ module "cspm" {
       cspm_queue_arn    = module.sqs_cspm.queue_arn
       runbook_cache_arn = aws_dynamodb_table.runbook_cache.arn
     }),
-    file("${path.module}/policies/cspm-remediation.json"),
   ]
 
   create_current_version_allowed_triggers = false

@@ -25,7 +25,7 @@ const ddb = new DynamoDBClient({});
 
 const SNS_TOPIC_ARN = process.env.SNS_TOPIC_ARN!;
 const ENABLED_CONTROLS: string[] = JSON.parse(process.env.ENABLED_CONTROLS ?? '["*"]');
-const LAMBDA_ROLE_ARN = process.env.LAMBDA_ROLE_ARN!;
+const AUTOMATION_ROLE_ARN = process.env.AUTOMATION_ROLE_ARN!;
 const REGION = process.env.AWS_REGION ?? "us-east-1";
 const RUNBOOK_CACHE_TABLE = process.env.RUNBOOK_CACHE_TABLE!;
 
@@ -97,7 +97,7 @@ async function processFinding(finding: any) {
 
   const docName = result.document_name;
   const params = result.parameters ?? {};
-  params.AutomationAssumeRole = [LAMBDA_ROLE_ARN];
+  params.AutomationAssumeRole = [AUTOMATION_ROLE_ARN];
 
   let execId: string | undefined;
   try {

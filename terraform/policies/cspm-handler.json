@@ -32,7 +32,7 @@
       "Sid": "PassRole",
       "Effect": "Allow",
       "Action": "iam:PassRole",
-      "Resource": "arn:${partition}:iam::${account_id}:role/sechub-cspm"
+      "Resource": "arn:${partition}:iam::${account_id}:role/sechub-cspm-automation"
     },
     {
       "Sid": "Bedrock",
