@@ -17,6 +17,7 @@ const handlers = [
   { entry: "src/inspector/handler.ts", out: "dist/inspector/handler" },
   { entry: "src/ssm-callback/handler.ts", out: "dist/ssm-callback/handler" },
   { entry: "src/slack/handler.ts", out: "dist/slack/handler" },
+  { entry: "src/unhandled/handler.ts", out: "dist/unhandled/handler" },
 ];
 
 for (const h of handlers) {
