@@ -11,6 +11,7 @@ import {
   StartAutomationExecutionCommand,
 } from "@aws-sdk/client-ssm";
 import { callBedrock, sechubFindingUrl } from "../shared/bedrock.js";
+import { findUngroundedParam } from "./grounding.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const loadPrompt = (name: string) => readFileSync(join(__dirname, "prompts", name), "utf-8");
@@ -130,7 +131,7 @@ async function processFinding(finding: any) {
 }
 
 async function askBedrockForRunbook(finding: any) {
-  const runbooks = await getAvailableRunbooks();
+  const runbooks = (await getAvailableRunbooks()).filter((name) => !name.includes("Delete"));
   const trimmed = {
     Compliance: finding.Compliance ?? {},
     GeneratorId: finding.GeneratorId ?? "",
@@ -160,10 +161,14 @@ async function askBedrockForRunbook(finding: any) {
 
   if (step2.skip) return { action: "SKIP", reason: step2.reason ?? "Required parameters could not be determined" };
 
+  const parameters = step2.parameters ?? {};
+  const ungrounded = findUngroundedParam(parameters, docParams, findingJson);
+  if (ungrounded) return { action: "SKIP", reason: `Parameter ${ungrounded} not found in finding` };
+
   return {
     action: "REMEDIATE",
     document_name: step1.document_name,
-    parameters: step2.parameters ?? {},
+    parameters,
     reason: step1.reason,
   };
 }
