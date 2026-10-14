@@ -1,0 +1,17 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RunbookMappings",
+      "Effect": "Allow",
+      "Action": "dynamodb:UpdateItem",
+      "Resource": "${runbook_cache_arn}"
+    },
+    {
+      "Sid": "RerunCspm",
+      "Effect": "Allow",
+      "Action": "lambda:InvokeFunction",
+      "Resource": "${cspm_function_arn}"
+    }
+  ]
+}

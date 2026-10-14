@@ -52,13 +52,16 @@ variable "bedrock_model_id" {
 
 variable "slack_bot_token" {
   type      = string
-  default   = ""
   sensitive = true
 }
 
 variable "slack_channel_id" {
-  type    = string
-  default = ""
+  type = string
+}
+
+variable "slack_signing_secret" {
+  type      = string
+  sensitive = true
 }
 
 variable "enabled_controls" {
