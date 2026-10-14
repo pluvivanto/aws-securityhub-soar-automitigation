@@ -27,7 +27,7 @@ export async function handler(event: any) {
       new UpdateItemCommand({
         TableName: RUNBOOK_CACHE_TABLE,
         Key: { pk: { S: `control#${controlId}` } },
-        UpdateExpression: "SET #s = :s, decidedBy = :u, decidedAt = :t REMOVE finding",
+        UpdateExpression: "SET #s = :s, decidedBy = :u, decidedAt = :t REMOVE finding, expiresAt",
         ConditionExpression: "#s = :pending",
         ExpressionAttributeNames: { "#s": "status" },
         ExpressionAttributeValues: {

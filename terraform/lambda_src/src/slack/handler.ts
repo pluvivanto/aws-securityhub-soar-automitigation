@@ -21,6 +21,7 @@ const STATUS_EMOJI: Record<string, string> = {
   REMEDIATION_TIMED_OUT: ":hourglass:",
   REMEDIATION_CANCELLED: ":no_entry_sign:",
   UNHANDLED: ":inbox_tray:",
+  APPROVAL_REQUESTED: ":raised_hand:",
 };
 
 const START_STATUSES = new Set(["STARTED", "PATCH_STARTED"]);
@@ -74,6 +75,29 @@ async function postToSlack(msg: any) {
       type: "section",
       text: { type: "mrkdwn", text: `*Detail:*\n${detailChunks[0] ?? ""}` },
     },
+    ...(msg.approval
+      ? [
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "Approve" },
+                style: "primary",
+                action_id: "approve",
+                value: msg.approval,
+              },
+              {
+                type: "button",
+                text: { type: "plain_text", text: "Reject" },
+                style: "danger",
+                action_id: "reject",
+                value: msg.approval,
+              },
+            ],
+          },
+        ]
+      : []),
   ];
 
   let thread_ts: string | undefined;
