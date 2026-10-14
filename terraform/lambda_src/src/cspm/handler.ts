@@ -81,7 +81,7 @@ async function processFinding(finding: any) {
     return { control: controlId, status: "SKIPPED", reason: `already ${workflowStatus}` };
   }
 
-  const result = await askBedrockForRunbook(finding);
+  const result = await askBedrockForRunbook(finding, controlId);
   console.log(
     JSON.stringify({
       event: "BEDROCK_DECISION",
@@ -95,6 +95,10 @@ async function processFinding(finding: any) {
   );
 
   if (result.action === "SKIP") return { control: controlId, status: "SKIPPED", reason: result.reason };
+  if (result.action === "PENDING") {
+    await requestApproval(controlId, resourceId, result.document_name, result.reason, finding);
+    return { control: controlId, status: "PENDING_APPROVAL", document: result.document_name };
+  }
 
   const docName = result.document_name;
   const params = result.parameters ?? {};
@@ -130,7 +134,7 @@ async function processFinding(finding: any) {
   return { control: controlId, status: "STARTED", document: docName, execution_id: execId };
 }
 
-async function askBedrockForRunbook(finding: any) {
+async function askBedrockForRunbook(finding: any, controlId: string) {
   const runbooks = (await getAvailableRunbooks()).filter((name) => !name.includes("Delete"));
   const trimmed = {
     Compliance: finding.Compliance ?? {},
@@ -142,19 +146,28 @@ async function askBedrockForRunbook(finding: any) {
   };
   const findingJson = JSON.stringify(trimmed, null, 2);
 
-  const step1 = await callBedrock(
-    PROMPT_PICK.replace("{{runbooks}}", JSON.stringify(runbooks)).replace("{{finding}}", findingJson),
-  );
+  const mapping = await getMapping(controlId);
+  if (mapping?.status === "REJECTED") return { action: "SKIP", reason: "Mapping rejected" };
+  if (mapping?.status === "PENDING") return { action: "SKIP", reason: "Awaiting approval" };
 
-  if (step1.action !== "REMEDIATE") return step1;
-  if (!runbooks.includes(step1.document_name))
-    return { action: "SKIP", reason: "Bedrock suggested non-existent document" };
+  if (mapping?.status !== "APPROVED") {
+    const step1 = await callBedrock(
+      PROMPT_PICK.replace("{{runbooks}}", JSON.stringify(runbooks)).replace("{{finding}}", findingJson),
+    );
+    if (step1.action !== "REMEDIATE") return step1;
+    if (!runbooks.includes(step1.document_name))
+      return { action: "SKIP", reason: "Bedrock suggested non-existent document" };
+    return { action: "PENDING", document_name: step1.document_name, reason: step1.reason };
+  }
 
-  const docParams = await getDocParameters(step1.document_name);
-  if (!docParams) return { action: "SKIP", reason: `Could not fetch params for ${step1.document_name}` };
+  const documentName = mapping.document;
+  if (!runbooks.includes(documentName)) return { action: "SKIP", reason: `${documentName} is no longer allowed` };
+
+  const docParams = await getDocParameters(documentName);
+  if (!docParams) return { action: "SKIP", reason: `Could not fetch params for ${documentName}` };
 
   const step2 = await callBedrock(
-    PROMPT_FILL.replace("{{documentName}}", step1.document_name)
+    PROMPT_FILL.replace("{{documentName}}", documentName)
       .replace("{{docParams}}", JSON.stringify(docParams, null, 2))
       .replace("{{finding}}", findingJson),
   );
@@ -167,10 +180,53 @@ async function askBedrockForRunbook(finding: any) {
 
   return {
     action: "REMEDIATE",
-    document_name: step1.document_name,
+    document_name: documentName,
     parameters,
-    reason: step1.reason,
+    reason: "approved mapping",
   };
+}
+
+async function getMapping(controlId: string) {
+  const { Item } = await ddb.send(
+    new GetItemCommand({ TableName: RUNBOOK_CACHE_TABLE, Key: { pk: { S: `control#${controlId}` } } }),
+  );
+  if (!Item) return null;
+  const expiresAt = Number(Item.expiresAt?.N ?? Infinity);
+  if (expiresAt < Date.now() / 1000) return null;
+  return { status: Item.status?.S, document: Item.document?.S ?? "" };
+}
+
+async function requestApproval(controlId: string, resourceId: string, docName: string, reason: string, finding: any) {
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    await ddb.send(
+      new PutItemCommand({
+        TableName: RUNBOOK_CACHE_TABLE,
+        Item: {
+          pk: { S: `control#${controlId}` },
+          status: { S: "PENDING" },
+          document: { S: docName },
+          finding: { S: JSON.stringify(finding) },
+          expiresAt: { N: String(now + 7 * 24 * 3600) },
+        },
+        ConditionExpression: "attribute_not_exists(pk) OR expiresAt < :now",
+        ExpressionAttributeValues: { ":now": { N: String(now) } },
+      }),
+    );
+  } catch (e: any) {
+    if (e.name === "ConditionalCheckFailedException") return;
+    throw e;
+  }
+  console.log(JSON.stringify({ event: "APPROVAL_REQUESTED", controlId, resourceId, document: docName }));
+  await notify(
+    controlId,
+    resourceId,
+    "APPROVAL_REQUESTED",
+    finding.ProductFields?.["aws/securityhub/ProductName"] ?? "Security Hub",
+    `approval#${controlId}`,
+    `finding: <${sechubFindingUrl(finding.Id)}|${finding.Id.split("/").pop()}>\nproposed: \`${docName}\`\nreason: ${reason}`,
+    controlId,
+  );
 }
 
 async function getAvailableRunbooks(): Promise<string[]> {
@@ -262,6 +318,7 @@ async function notify(
   product: string,
   threadKey: string,
   message: string,
+  approval?: string,
 ) {
   try {
     await sns.send(
@@ -269,7 +326,7 @@ async function notify(
         TopicArn: SNS_TOPIC_ARN,
         Subject: `[${status}] ${controlId}`,
         Message: JSON.stringify(
-          { control: controlId, resource: resourceId, status, product, threadKey, message },
+          { control: controlId, resource: resourceId, status, product, threadKey, message, approval },
           null,
           2,
         ),
