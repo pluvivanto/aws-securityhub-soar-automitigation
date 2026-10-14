@@ -76,6 +76,7 @@ slackq: SQS\nSlack queue { class: svc; icon: ${ic-sqs} }
 slackfn: Lambda\nsechub-slack { class: svc; icon: ${ic-lambda} }
 slack: Slack { class: svc; icon: ${ic-slack} }
 sstate: DynamoDB\nslack-state { class: svc; icon: ${ic-ddb} }
+approval: Lambda\nsechub-approval { class: svc; icon: ${ic-lambda} }
 sechub2: Security Hub { class: svc; icon: ${ic-sechub} }
 
 sources.config -> sechub
@@ -92,4 +93,7 @@ cspm.sm -> events
 inspector.sm -> events
 events -> callback -> sns -> slackq -> slackfn -> slack
 slackfn -> sstate { class: dash }
+slack -> approval: approve / reject { class: dash }
+approval -> cspm.cache: save mapping { class: dash }
+approval -> cspm.fn: rerun finding
 callback -> sechub2: resolve { style.stroke: "#2563EB"; style.stroke-width: 2 }

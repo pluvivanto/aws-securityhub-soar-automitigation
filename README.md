@@ -1,18 +1,8 @@
 # sechub-auto-remediation
 
-Auto-fixes AWS Security Hub findings using Bedrock to pick the right remediation. No static mapping needed. New controls and CVEs are handled without code changes.
+Serverless SOAR that auto-remediates AWS Security Hub findings. An LLM proposes the fix, and a human-in-the-loop approves it in Slack before it runs.
 
 ![Architecture](./docs/architecture.svg)
-
-## Lambdas
-
-| Name | Purpose |
-| --- | --- |
-| `sechub-cspm` | Asks Bedrock which SSM runbook to run, then runs it |
-| `sechub-inspector` | Patches CVE-affected EC2 instances via SSM |
-| `sechub-ssm-callback` | Picks up SSM completion events, resolves findings, sends to SNS |
-| `sechub-unhandled` | Sends HIGH+ findings with no handler to Slack |
-| `sechub-slack` | Forwards SNS messages to Slack |
 
 ## Getting started
 
@@ -33,6 +23,8 @@ slack_bot_token      = "xoxb-..."
 slack_channel_id     = "C..."
 slack_signing_secret = "..."
 ```
+
+The Slack app needs the `chat:write` and `reactions:write` scopes. After `apply`, turn on Interactivity and set the Request URL to `terraform output -raw slack_interactivity_url`.
 
 ## Variables
 
