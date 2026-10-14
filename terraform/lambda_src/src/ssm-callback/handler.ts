@@ -1,7 +1,12 @@
 import { DeleteItemCommand, DynamoDBClient, GetItemCommand, PutItemCommand } from "@aws-sdk/client-dynamodb";
 import { BatchUpdateFindingsCommand, GetFindingsCommand, SecurityHubClient } from "@aws-sdk/client-securityhub";
 import { PublishCommand, SNSClient } from "@aws-sdk/client-sns";
-import { GetAutomationExecutionCommand, GetCommandInvocationCommand, SSMClient } from "@aws-sdk/client-ssm";
+import {
+  DescribeInstancePatchStatesCommand,
+  GetAutomationExecutionCommand,
+  GetCommandInvocationCommand,
+  SSMClient,
+} from "@aws-sdk/client-ssm";
 
 const ssm = new SSMClient({});
 const sechub = new SecurityHubClient({});
@@ -111,7 +116,7 @@ async function handleRunCommandCallback(event: any) {
   if (!lockItem) return;
 
   const cmdUrl = `https://${REGION}.console.aws.amazon.com/systems-manager/run-command/${commandId}?region=${REGION}`;
-  const mappedStatus = COMMAND_STATUS_MAP[status] ?? status;
+  let mappedStatus = COMMAND_STATUS_MAP[status] ?? status;
   const title = instanceId;
 
   const findingIds: { Id: string; ProductArn: string }[] = lockItem.findingIds?.S
@@ -130,7 +135,20 @@ async function handleRunCommandCallback(event: any) {
     console.log(JSON.stringify({ event: "GET_INVOCATION_FAILED", commandId, error: e.message ?? String(e) }));
   }
 
+  let pendingReboot = false;
   if (status === "Success") {
+    try {
+      const { InstancePatchStates } = await ssm.send(
+        new DescribeInstancePatchStatesCommand({ InstanceIds: [instanceId] }),
+      );
+      pendingReboot = (InstancePatchStates?.[0]?.InstalledPendingRebootCount ?? 0) > 0;
+    } catch (e: any) {
+      console.log(JSON.stringify({ event: "GET_PATCH_STATE_FAILED", instanceId, error: e.message ?? String(e) }));
+    }
+    if (pendingReboot) mappedStatus = "PATCH_PENDING_REBOOT";
+  }
+
+  if (status === "Success" && !pendingReboot) {
     if (findingIds.length > 0) {
       try {
         for (let i = 0; i < findingIds.length; i += 100) {
@@ -151,11 +169,12 @@ async function handleRunCommandCallback(event: any) {
     }
   }
 
-  console.log(JSON.stringify({ event: "COMMAND_CALLBACK", commandId, instanceId, status: mappedStatus, nothingToDo }));
+  console.log(JSON.stringify({ event: "COMMAND_CALLBACK", commandId, instanceId, status: mappedStatus, nothingToDo, pendingReboot }));
 
   if (!nothingToDo) {
-    const message =
-      status === "Success"
+    const message = pendingReboot
+      ? `Installed, reboot required. Findings stay open until Inspector rescans. <${cmdUrl}|View in console>`
+      : status === "Success"
         ? `Done. <${cmdUrl}|View in console>`
         : `Error: ${output.slice(0, 500)}\n<${cmdUrl}|View in console>`;
     await notifySns(title, instanceId, mappedStatus, "Inspector", commandId, message);

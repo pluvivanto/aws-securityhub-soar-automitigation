@@ -14,6 +14,7 @@ const STATUS_EMOJI: Record<string, string> = {
   SKIPPED: ":fast_forward:",
   PATCH_STARTED: ":wrench:",
   PATCH_COMPLETE: ":white_check_mark:",
+  PATCH_PENDING_REBOOT: ":arrows_counterclockwise:",
   PATCH_FAILED: ":x:",
   REMEDIATION_COMPLETE: ":white_check_mark:",
   REMEDIATION_FAILED: ":x:",
@@ -25,6 +26,7 @@ const STATUS_EMOJI: Record<string, string> = {
 const START_STATUSES = new Set(["STARTED", "PATCH_STARTED"]);
 const REPLY_STATUSES = new Set([
   "PATCH_COMPLETE",
+  "PATCH_PENDING_REBOOT",
   "PATCH_FAILED",
   "REMEDIATION_COMPLETE",
   "REMEDIATION_FAILED",

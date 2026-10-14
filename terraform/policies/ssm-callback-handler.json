@@ -7,7 +7,8 @@
       "Action": [
         "ssm:DescribeAutomationExecutions",
         "ssm:GetAutomationExecution",
-        "ssm:GetCommandInvocation"
+        "ssm:GetCommandInvocation",
+        "ssm:DescribeInstancePatchStates"
       ],
       "Resource": "*"
     },
